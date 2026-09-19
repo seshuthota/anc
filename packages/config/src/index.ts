@@ -1,0 +1,26 @@
+import { z } from "zod";
+
+export const EnvSchema = z.object({
+  MODEL_PROVIDER: z.string().min(1).default("openai"),
+  MODEL_ID: z.string().min(1).default("gpt-4.1-mini"),
+  MODEL_API_KEY: z.string().optional(),
+  COMPANY_DB_PATH: z.string().min(1).default("./data/company.sqlite"),
+  RUNTIME_DB_PATH: z.string().min(1).default("./data/runtime.sqlite"),
+  DATASET_VERSION: z.string().min(1).default("sync-regression-v1"),
+  DEMO_CLOCK: z.string().datetime({ offset: true }).default("2026-09-20T08:00:00.000Z"),
+  DEMO_TIMEZONE: z.string().min(1).default("UTC"),
+  MAX_INVESTIGATION_ROUNDS: z.coerce.number().int().positive().default(8),
+  MAX_TOOL_CALLS: z.coerce.number().int().positive().default(32),
+  MAX_RUNTIME_MS: z.coerce.number().int().positive().default(120000),
+  MAX_MODEL_TOKENS: z.coerce.number().int().positive().default(24000),
+  AGENT_HOST: z.string().min(1).default("127.0.0.1"),
+  AGENT_PORT: z.coerce.number().int().min(1).max(65535).default(4100),
+  WEB_HOST: z.string().min(1).default("127.0.0.1"),
+  WEB_PORT: z.coerce.number().int().min(1).max(65535).default(3000)
+});
+
+export type Env = z.infer<typeof EnvSchema>;
+
+export function parseEnv(input: NodeJS.ProcessEnv = process.env): Env {
+  return EnvSchema.parse(input);
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@anc/database",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./seed": "./src/seed.ts"
+  },
+  "scripts": {
+    "seed": "tsx src/seed.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  }
+}
