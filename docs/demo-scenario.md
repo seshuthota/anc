@@ -18,12 +18,17 @@ Expected discovery path:
 
 Follow-ups from generated A2UI actions: affected accounts, release inspection, account inspection, financial impact, evidence envelopes, table view, ticket assignment.
 
-Other same-shell tasks (no extra routes):
+Same-shell tasks (no extra routes):
 
-- Finance: “Compare overdue invoices by customer”
-- Support: “Show unassigned escalations” then assign through the generated confirmation
-- Unsupported: “Refund every overdue invoice by wire transfer” stops with a limitation
-- Unseen capability (no planner/page branch): “What open incidents should I know about?”
+- Finance: "Compare overdue invoices by customer" → sortable comparison with tool-computed totals and account selection
+- Support: "Show unassigned escalations" then assign through the generated confirmation
+- Operations: "Show me the error rate trend over the past week" → service error-rate chart from `get_service_health_series`
+- Any authorized user: "Draft an onboarding checklist for customer-001" → editable draft with explicit assumptions
+- Any authorized user: "Show only these accounts as a table" → reuses the thread's stored records
+- Unsupported: "Refund every overdue invoice by wire transfer" stops with a limitation
+- Not granted: support asking for overdue invoices, or operations asking to assign a ticket, returns a limitation naming the unavailable domain and the alternatives that persona does have
+- Unseen capability (no planner/page branch): "What open incidents should I know about?"
 
 Replay without model calls: `pnpm replay`.
-Live-strict evaluation: `MODEL_PROVIDER=explabs pnpm eval:live`. Explicit fallback evaluation: `pnpm eval:live-fallback`.
+Fixture evaluation: `pnpm eval` (27 investigation runs + the 66-cell acceptance matrix).
+Live-strict evaluation: `MODEL_PROVIDER=explabs pnpm eval:live`. Explicit fallback evaluation: `pnpm eval:live-fallback`. Neither has been rerun since 2026-09-20.

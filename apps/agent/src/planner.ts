@@ -26,10 +26,12 @@ export type WorkPlan = {
 
 const STOP = new Set(["about", "should", "what", "know", "this", "that", "with", "from", "have", "need", "needs", "show", "list", "give", "tell", "please", "the", "and", "for", "any", "our", "you"]);
 const BROAD = /attention|this morning|start of the day|going on with the company|need to know|care about|anything on fire|brief me|overnight|unusual/;
-const UNSUPPORTED_WRITE = /refund|wire transfer|payroll|send email to all customers|delete all/;
+const UNSUPPORTED_WRITE = /refund|wire|pay out|payout|reimburse|remit|transfer funds|send money|payroll|send email to all customers|delete all/;
 const TREND = /trend|over time|this week|last week|over the past|timeline|history of|each day|daily|chart|graph/;
 const COMPARISON = /compare|comparison|versus|vs\.?|side by side|breakdown|by customer|ranking|which customers/;
 const DRAFT = /draft|checklist|onboarding|propose|write a|prepare a|plan for/;
+/** The assignment *verb* in verb form, so "unassigned", "assignee" and "no owner" do not match. */
+const WRITE_INTENT = /(?<![a-z])assign(?![a-z])|(?<![a-z])reassign(?![a-z])|\bset an? (owner|assignee)\b/;
 
 export type PlanModelRequest = {
   objective: string;
@@ -61,7 +63,7 @@ export async function proposePlan(input: {
 }): Promise<WorkPlan> {
   const action = input.action?.name;
   const text = input.objective.toLowerCase();
-  const tableView = /as a table|show this as a table|in a table/.test(text);
+  const tableView = /\btable\b|\btabular\b|\bas a list\b/.test(text);
   if (action === "show_as_table" || (tableView && input.priorIntent)) {
     return { intent: input.priorIntent || "investigate", view: "table", tasks: [], deterministic: true, source: "fixture" };
   }
@@ -131,13 +133,15 @@ export function fixturePlan(input: {
     };
   }
   const text = input.objective.toLowerCase();
+  const broad = BROAD.test(text);
+  const denied = deniedRequest(input, text);
+  if (denied) return denied;
   const authorized = authorizedCapabilities(input.principal).filter((item) => item.sideEffect === "read" || /assign|owner/.test(text));
   const draftPlan = draftRequest(input, authorized);
   if (draftPlan) return draftPlan;
   const trendPlan = trendRequest(input, authorized, text);
   if (trendPlan) return trendPlan;
   const scored = authorized.map((capability) => ({ capability, score: scoreCapability(input.objective, input.principal, capability) }));
-  const broad = BROAD.test(input.objective.toLowerCase());
   const selected = broad
     ? coreTasks(input.principal, input.objective)
     : groupedTasks((() => {
@@ -155,18 +159,84 @@ export function fixturePlan(input: {
       source: "fixture",
     };
   }
-  const view = broad
-    ? "summary"
-    : TREND.test(text)
-      ? "trend"
-      : COMPARISON.test(text) && selected.some((item) => item.capabilities.includes("cap.finance.invoices"))
-        ? "comparison"
-        : selected.some((item) => item.capabilities.includes("cap.tickets.assign") || item.capabilities.includes("cap.tickets.read") && /assign|unassigned|queue|owner/.test(text))
-          ? "queue"
-          : selected.some((item) => item.capabilities.some((id) => CAPABILITIES.find((cap) => cap.id === id)?.rowEntity))
-            ? "table"
-            : "summary";
+  const view = broad ? "summary" : viewFor(selected, text);
   return sanitizePlan({ intent: "work", view, tasks: selected.slice(0, 3), deterministic: true, source: "fixture" }, input.principal);
+}
+
+/**
+ * Recognises a request the persona is not permitted to serve and says so.
+ *
+ * Without this, a request like "compare overdue invoices by customer" from a
+ * support user silently matched an authorized customer-read capability and
+ * returned an unrelated answer with no limitation shown. The comparison is made
+ * against the whole catalog, not the granted subset, so the workspace can say
+ * "that is finance data" rather than guessing at something adjacent.
+ */
+function deniedRequest(input: { objective: string; principal: Principal }, text: string): WorkPlan | undefined {
+  if (UNSUPPORTED_WRITE.test(text)) {
+    return {
+      intent: "unsupported",
+      view: "summary",
+      tasks: [],
+      unsupported: "This workspace cannot perform that business operation.",
+      deterministic: true,
+      source: "fixture",
+    };
+  }
+  if (BROAD.test(text)) return undefined;
+  const scored = CAPABILITIES
+    .map((capability) => ({ capability, score: scoreCapability(input.objective, input.principal, capability) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  if (!best) return undefined;
+  const tied = scored.filter((item) => item.score === best.score);
+  const permitted = tied.filter((item) => hasGrant(input.principal, item.capability.id));
+  // A request to *perform* an assignment is refused when the write capability is
+  // not granted, rather than quietly degrading to the matching read. The test is
+  // the verb "assign", not the adjective "unassigned": "which tickets have no
+  // owner" is a question about records, "assign the first one" is a change.
+  const writeCapability = CAPABILITIES.find((capability) => capability.sideEffect === "write" && WRITE_INTENT.test(text));
+  if (writeCapability && !hasGrant(input.principal, writeCapability.id)) {
+    return {
+      intent: "unsupported",
+      view: "summary",
+      tasks: [],
+      unsupported: `You are not authorized to ${writeCapability.description.toLowerCase()}. You can read the relevant records, but this change has to be made by a permitted owner.`,
+      deterministic: true,
+      source: "fixture",
+    };
+  }
+  if (permitted.length) return undefined;
+  const domains = [...new Set(tied.map((item) => item.capability.domain))];
+  const alternatives = [...new Set(tied
+    .filter((item) => hasGrant(input.principal, item.capability.id))
+    .map((item) => item.capability.description))];
+  return {
+    intent: "unsupported",
+    view: "summary",
+    tasks: [],
+    unsupported: `That request needs ${domains.join(" or ")} data, which is not available to you.${alternatives.length ? ` Available to you: ${alternatives.join("; ")}.` : ""}`,
+    deterministic: true,
+    source: "fixture",
+  };
+}
+
+/**
+ * Chooses the view from the capabilities that were actually scheduled, not from
+ * the wording of the request. That is what makes paraphrases converge: "compare
+ * X by customer" and "break down X per customer" select the same capability and
+ * therefore compose the same view, with no extra routing branch.
+ */
+function viewFor(selected: PlannedTask[], text: string): WorkPlan["view"] {
+  const capabilities = selected.flatMap((item) => item.capabilities);
+  if (capabilities.includes("cap.service.trend")) return "trend";
+  if (capabilities.includes("cap.finance.invoices")) return "comparison";
+  const queueish = capabilities.includes("cap.tickets.assign")
+    || (capabilities.includes("cap.tickets.read") && /assign|unassigned|queue|owner|escalation/.test(text));
+  if (queueish) return "queue";
+  if (capabilities.some((id) => CAPABILITIES.find((cap) => cap.id === id)?.rowEntity)) return "table";
+  return "summary";
 }
 
 /** Trend requests schedule the series capability and compose as a trend view. */
@@ -369,12 +439,25 @@ function objectiveFor(domain: Domain, objective: string, principal: Principal) {
   return objective;
 }
 
+/**
+ * Light morphological match. Without it, "list the tickets still waiting for an
+ * assignee" scores nothing against a capability described as
+ * "Unassigned support queue", because neither "tickets" nor "assignee" occurs
+ * literally in it. Longer words match on a shared prefix, so plural and noun
+ * forms reach the same capability without a synonym list per capability.
+ */
+function termMatches(haystack: string, word: string): boolean {
+  if (haystack.includes(word)) return true;
+  if (word.length >= 6) return haystack.includes(word.slice(0, 5));
+  return false;
+}
+
 function scoreCapability(objective: string, principal: Principal, capability: CapabilityDefinition): number {
   const haystack = `${capability.id} ${capability.tool} ${capability.description} ${capability.rowEntity ?? ""}`.toLowerCase();
   const words = objective.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3 && !STOP.has(word));
-  let score = words.filter((word) => haystack.includes(word)).length;
+  let score = words.filter((word) => termMatches(haystack, word)).length;
   for (const priority of principal.preferences.priorities) {
-    const overlap = priority.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3 && haystack.includes(word));
+    const overlap = priority.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3 && termMatches(haystack, word));
     if (overlap.length && (BROAD.test(objective.toLowerCase()) || words.some((word) => priority.toLowerCase().includes(word)))) {
       score += overlap.length;
     }

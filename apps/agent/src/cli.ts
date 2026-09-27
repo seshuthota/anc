@@ -39,8 +39,9 @@ async function main() {
       }
     }
     const repeats = Number(process.env.EVAL_REPEATS ?? 3);
+    const matrixRepeats = Number(process.env.EVAL_MATRIX_REPEATS ?? 1);
     const { runEvalSuite } = await import("./eval/suite.js");
-    const report = await runEvalSuite({ repeats, live });
+    const report = await runEvalSuite({ repeats, live, matrixRepeats });
     console.log(JSON.stringify({
       live: report.live,
       provider: report.provider,
@@ -53,7 +54,14 @@ async function main() {
       strictRate: report.strictRate,
       latency: report.latency,
       tokens: report.tokens,
-      failed: report.rows.filter((row) => !row.pass).map((row) => ({ scenario: row.scenario, paraphrase: row.paraphrase, repeat: row.repeat, checks: row.checks })),
+      suites: {
+        investigation: { total: report.suites.investigation.total, passed: report.suites.investigation.passed, rate: report.suites.investigation.rate },
+        matrix: { total: report.suites.matrix.total, passed: report.suites.matrix.passed, rate: report.suites.matrix.rate, strictRate: report.suites.matrix.strictRate },
+      },
+      matrixByCell: report.matrixByCell,
+      matrixCases: report.suites.matrix.total,
+      investigationRuns: report.suites.investigation.total,
+      failed: report.failedRows,
     }, null, 2));
     if (live && report.executionMode === "live-strict" && report.strictRate < 0.9) process.exitCode = 1;
     else if (live && report.rate < 0.9) process.exitCode = 1;

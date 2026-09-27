@@ -1,10 +1,10 @@
 # Agent-native enterprise workspace: implementation roadmap
 
-Updated: 2026-09-23. Status: P0–P5 local slice is in the tree. Live planning asks the model for a plan and then validates it; fixture mode remains the default. Authenticated sessions use OpenID Connect when `AUTH_MODE=oidc`. Deployment controls, grant revocation, retention, backups, cost reporting, and an external read/write connector are in the tree and stay inactive until their environment is set. No production identity provider or customer system is configured in this workspace. The four-person unfamiliar-user study is still open. Shared employee sessions and autonomous background work stay deferred.
+Updated: 2026-09-28. Status: P0–P5 local slice is in the tree. The P4 gaps found in the 2026-09-23 review (dead `view` routing, no real table, no drafts, no trend or selection controls, a validator/renderer component mismatch, and dropped clarification requests) are closed, and the evaluation harness now runs a 66-cell acceptance matrix in addition to the morning-investigation regression. Live planning asks the model for a plan and then validates it; fixture mode remains the default. Authenticated sessions use OpenID Connect when `AUTH_MODE=oidc`. Deployment controls, grant revocation, retention, backups, cost reporting, and an external read/write connector are in the tree and stay inactive until their environment is set. No production identity provider or customer system is configured in this workspace. The four-person unfamiliar-user study is still open, and the acceptance matrix has never been run against a live model. Shared employee sessions and autonomous background work stay deferred.
 
 This is the active roadmap. It supersedes the investigation-only scope in the [original specification](../idea.md). The previous plan is preserved in the [historical archive](archive/investigation-mvp-plan-2026-09-20.md); its completion markers are historical claims, not a fresh audit. The [architecture](architecture.md), [demo](demo-scenario.md), and [evaluation report](evaluation-results.md) describe the existing implementation rather than the full target below.
 
-Basis: source inspection and existing evaluation documentation. Tests, browser flows, and live evaluations were not rerun for this planning update.
+Basis: source inspection, the fixture test suite, and a fixture execution of the acceptance matrix on 2026-09-28. Live evaluations, browser flows, and the completeness audit were not rerun for this update.
 
 ## 1. Product objective
 
@@ -153,7 +153,7 @@ Dependencies: P2. Estimate: 5–8 days.
 - [x] Validate known capabilities, permissions, input types, acyclic dependencies, artifact references, and total task/tool/time/token budgets before scheduling.
 - [x] Begin with at most three concurrent specialist tasks and bounded replanning. Runtime code owns scheduling; model text cannot create unlimited work.
 - [x] Carry selected entities, explicit periods, relevant prior artifacts, and user edits into follow-ups. Resolve “these accounts” from state.
-- [x] Ask targeted clarification when required inputs or consequential ambiguities cannot be resolved. Return a clear limitation for unsupported tasks.
+- [x] Ask targeted clarification when required inputs or consequential ambiguities cannot be resolved. Return a clear limitation for unsupported tasks. A clarification is a distinct outcome: it is no longer rewritten into a permission denial, and a request the persona is not granted names the unavailable domain and the alternatives they do have.
 - [x] Preserve partial outputs, conflicting evidence, missing data, and unmet success criteria. Show concise plans/progress, not private reasoning.
 - [x] Keep deterministic plans in labeled fixture mode only; do not silently replace live planning.
 
@@ -165,13 +165,13 @@ Primary files: `graph.ts`, `runtime.ts`, specialist loop, new planner/registry m
 
 Dependencies: P3; generic component preparation may begin after P2 contracts settle. Estimate: 5–8 days.
 
-- [x] Replace fixed composition with a constrained composition step using the objective, authorized artifacts, interaction needs, and supported catalog.
-- [x] Build reusable record tables, detail views, comparisons, metric groups, time-series views, forms, selection/filter controls, draft previews, and action review controls as acceptance tasks require them.
-- [x] Verify A2UI adapter behavior for nested data updates, surface lifecycle, event bindings, and form state. Prefer supported renderer behavior and document catalog extensions.
-- [x] Validate components, data paths, references, action bindings, size/depth, and cycles before rendering. Never execute generated HTML/JavaScript.
-- [x] Use stable component/artifact IDs. Preserve selection, focus, scroll, and unsaved edits across updates; distinguish user input from regenerated defaults.
+- [x] Replace fixed composition with a constrained composition step using the objective, authorized artifacts, interaction needs, and supported catalog. The view is chosen from the capabilities actually scheduled, so paraphrases converge without extra routing branches.
+- [x] Build reusable record tables, detail views, comparisons, metric groups, time-series views, forms, selection/filter controls, draft previews, and action review controls as acceptance tasks require them. Tables sort by column with numeric ordering where the artifact supplies it and show tool-computed totals; time series render as an SVG chart; selection uses checkbox groups; drafts are editable with completion toggles.
+- [x] Verify A2UI adapter behavior for nested data updates, surface lifecycle, event bindings, and form state. Prefer supported renderer behavior and document catalog extensions. `Table`, `TextField`, `Checkbox` and `Chart` are documented adapter extensions in `apps/web/lib/a2ui.tsx`.
+- [x] Validate components, data paths, references, action bindings, size/depth, and cycles before rendering. Never execute generated HTML/JavaScript. The validator and renderer now share one component list, with a test that fails if the renderer stops handling an accepted type.
+- [x] Use stable component/artifact IDs. Preserve selection, focus, scroll, and unsaved edits across updates; distinguish user input from regenerated defaults. Sort order, edited field text and checkbox state live in the adapter, not the data model, so a regenerated surface cannot discard them.
 - [x] Provide readable source inspection with filters, timestamps, units, and limitations; keep raw JSON secondary.
-- [x] Support “show this as a table” without losing context or unnecessarily querying tools again.
+- [x] Support "show this as a table" without losing context or unnecessarily querying tools again. A typed follow-up resolves against the last accepted surface's view and reuses the thread's stored artifacts.
 - [x] Retain the last valid surface on failure. A disclosed generic artifact view is an acceptable recovery path, measured separately from successful composition.
 
 Primary files: `composer.ts`, `a2ui-validate.ts`, `apps/web/lib/a2ui.tsx`, A2UI/artifact contracts, styles.
@@ -202,13 +202,15 @@ Primary areas: action contracts, runtime action handling/storage, MCP tools, dat
 Dependencies: P0–P5. Estimate: 4–7 days plus participant scheduling.
 
 - [x] Freeze held-out paraphrases and data variations before prompt tuning; run the acceptance matrix below.
-- [x] Add one new business capability through registry/tool/policy changes. Record all code changes; investigate any bespoke page or routing branch needed.
+- [x] Add one new business capability through registry/tool/policy changes. Record all code changes; investigate any bespoke page or routing branch needed. Two have been added this way since the last update: `list_open_incidents` and `get_service_health_series` (the service error-rate series behind the trend view). Neither required a frontend route or a planner branch; the series capability is reached by capability scoring and composes as a trend view.
 - [x] Report live-strict quality separately from fixture regressions and fallback-assisted completion, including composer fallback.
-- [x] Verify browser flows for streaming, identity isolation, forms, history, cancellation, stale state, and keyboard use.
+- [ ] Verify browser flows for streaming, identity isolation, forms, history, cancellation, stale state, and keyboard use. The Playwright smoke still covers progress, cancel, refresh and the identity label only. Sortable table headers, draft editing, completion toggles and selection have unit and HTTP coverage but no browser assertions.
 - [ ] Ask at least four unfamiliar participants representing the four personas to complete read, follow-up, and action tasks. Record completion, wrong turns, source comprehension, and disruptive layout changes.
 - [x] Update architecture, setup, demo scenarios, and evaluation documentation with observed results and unmet gates.
 
 **Exit gate:** workflows meet the quality thresholds below, and business capability growth does not require corresponding bespoke screens. Passing only the morning investigation is insufficient.
+
+The fixture acceptance matrix passes 66/66 with no substituted runs, including 21 promised refusals. It has never been run live-strict, and no unfamiliar participant has used the workspace, so this gate is not met.
 
 ### P7 — Real organization pilot
 
@@ -251,6 +253,8 @@ Validate malformed/cyclic UI graphs and unsupported actions. Test meaningful bro
 ### Live quality
 
 Proposed P6 matrix: 4 personas × 3 task families (retrieve/compare, contextual follow-up, prepare/execute) × 3 paraphrases = 36 cases; repeat twice for 72 runs. Include allowed and denied requests with explicit expected outcomes. Add separate failure/adversarial cases for injection, unavailable tools, timeout, stale state, and interrupted commits.
+
+The implemented fixture matrix is **66 cells per repeat**, slightly larger than the 36 above because most paraphrases are paired with both an allowed and a refused persona; 21 cells are promised refusals. `EVAL_MATRIX_REPEATS=2` gives 132 matrix runs. It has only been executed against the fixture path.
 
 Target at least 90% live-strict end-to-end success on supported held-out cases. Any unauthorized disclosure/write or fabricated successful execution blocks release regardless of average score. These are targets, not current measured results.
 

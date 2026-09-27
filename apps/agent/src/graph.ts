@@ -132,6 +132,19 @@ function ctxOf(state: { runId: string }): GraphContext {
   return ctx;
 }
 
+/**
+ * The view of the last accepted surface on this thread. A new run starts with an
+ * empty intent, so without this a typed follow-up like "show these as a table"
+ * could not tell that it was continuing an existing answer.
+ */
+function priorViewOf(store: RuntimeStore, threadId: string): string | undefined {
+  const latest = store.listSurfaces(threadId)[0];
+  if (!latest) return undefined;
+  const surface = store.getSurface(latest.surfaceId, latest.revision);
+  const view = (surface?.dataModel as { view?: string } | undefined)?.view;
+  return view || undefined;
+}
+
 async function planNode(state: typeof State.State): Promise<Partial<GraphState>> {
   const ctx = ctxOf(state);
   await waitForTestDelay(ctx.checkCancelled);
@@ -173,7 +186,7 @@ async function planNode(state: typeof State.State): Promise<Partial<GraphState>>
     action: state.intent ? { name: state.intent } as SemanticAction : undefined,
     principal: ctx.principal,
     selectedEntities: state.selectedEntities,
-    priorIntent: state.intent,
+    priorIntent: state.intent || priorViewOf(ctx.store, state.threadId),
     runId: state.runId,
   });
   const planErrors = validatePlan(plan);
