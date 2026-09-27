@@ -21,6 +21,7 @@ export type Principal = {
 
 export const TOOL_CAPABILITIES: Record<string, CapabilityId> = {
   get_service_health: "cap.service.health",
+  get_service_health_series: "cap.service.trend",
   get_error_metrics: "cap.service.errors",
   get_recent_releases: "cap.releases.read",
   get_release_details: "cap.releases.read",
@@ -44,6 +45,7 @@ export const TOOL_CAPABILITIES: Record<string, CapabilityId> = {
 
 const READS: CapabilityId[] = [
   "cap.service.health",
+  "cap.service.trend",
   "cap.service.errors",
   "cap.releases.read",
   "cap.customers.impact",
@@ -66,6 +68,7 @@ export const PERSONAS: Principal[] = [
     employeeId: "emp-ops",
     grants: [
       "cap.service.health",
+      "cap.service.trend",
       "cap.service.errors",
       "cap.releases.read",
       "cap.customers.impact",

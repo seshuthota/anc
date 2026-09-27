@@ -10,11 +10,13 @@ export type PlannedTask = {
   domain: Domain;
   question: string;
   capabilities: string[];
+  /** Records the task is scoped to, resolved from the objective or prior state. */
+  entities?: EntityRef[];
 };
 
 export type WorkPlan = {
   intent: string;
-  view: "summary" | "table" | "form" | "comparison" | "queue";
+  view: "summary" | "table" | "form" | "comparison" | "queue" | "trend";
   tasks: PlannedTask[];
   clarification?: string;
   unsupported?: string;
@@ -25,6 +27,9 @@ export type WorkPlan = {
 const STOP = new Set(["about", "should", "what", "know", "this", "that", "with", "from", "have", "need", "needs", "show", "list", "give", "tell", "please", "the", "and", "for", "any", "our", "you"]);
 const BROAD = /attention|this morning|start of the day|going on with the company|need to know|care about|anything on fire|brief me|overnight|unusual/;
 const UNSUPPORTED_WRITE = /refund|wire transfer|payroll|send email to all customers|delete all/;
+const TREND = /trend|over time|this week|last week|over the past|timeline|history of|each day|daily|chart|graph/;
+const COMPARISON = /compare|comparison|versus|vs\.?|side by side|breakdown|by customer|ranking|which customers/;
+const DRAFT = /draft|checklist|onboarding|propose|write a|prepare a|plan for/;
 
 export type PlanModelRequest = {
   objective: string;
@@ -125,7 +130,12 @@ export function fixturePlan(input: {
       source: "fixture",
     };
   }
-  const authorized = authorizedCapabilities(input.principal).filter((item) => item.sideEffect === "read" || /assign|owner/.test(input.objective.toLowerCase()));
+  const text = input.objective.toLowerCase();
+  const authorized = authorizedCapabilities(input.principal).filter((item) => item.sideEffect === "read" || /assign|owner/.test(text));
+  const draftPlan = draftRequest(input, authorized);
+  if (draftPlan) return draftPlan;
+  const trendPlan = trendRequest(input, authorized, text);
+  if (trendPlan) return trendPlan;
   const scored = authorized.map((capability) => ({ capability, score: scoreCapability(input.objective, input.principal, capability) }));
   const broad = BROAD.test(input.objective.toLowerCase());
   const selected = broad
@@ -147,12 +157,87 @@ export function fixturePlan(input: {
   }
   const view = broad
     ? "summary"
-    : selected.some((item) => item.capabilities.includes("cap.tickets.assign") || item.capabilities.includes("cap.tickets.read") && /assign|unassigned|queue|owner/.test(input.objective.toLowerCase()))
-      ? "queue"
-      : selected.some((item) => item.capabilities.some((id) => CAPABILITIES.find((cap) => cap.id === id)?.rowEntity))
-        ? "table"
-        : "summary";
+    : TREND.test(text)
+      ? "trend"
+      : COMPARISON.test(text) && selected.some((item) => item.capabilities.includes("cap.finance.invoices"))
+        ? "comparison"
+        : selected.some((item) => item.capabilities.includes("cap.tickets.assign") || item.capabilities.includes("cap.tickets.read") && /assign|unassigned|queue|owner/.test(text))
+          ? "queue"
+          : selected.some((item) => item.capabilities.some((id) => CAPABILITIES.find((cap) => cap.id === id)?.rowEntity))
+            ? "table"
+            : "summary";
   return sanitizePlan({ intent: "work", view, tasks: selected.slice(0, 3), deterministic: true, source: "fixture" }, input.principal);
+}
+
+/** Trend requests schedule the series capability and compose as a trend view. */
+function trendRequest(
+  input: { objective: string; principal: Principal },
+  authorized: CapabilityDefinition[],
+  text: string,
+): WorkPlan | undefined {
+  if (!TREND.test(text)) return undefined;
+  const capabilities = authorized.filter((item) => item.id === "cap.service.trend").map((item) => item.id);
+  if (!capabilities.length) {
+    return {
+      intent: "unsupported",
+      view: "summary",
+      tasks: [],
+      unsupported: "You are not authorized to read service telemetry trends.",
+      deterministic: true,
+      source: "fixture",
+    };
+  }
+  return sanitizePlan({
+    intent: "work",
+    view: "trend",
+    tasks: [task("reliability", "Show the service error-rate trend over the requested period.", capabilities)],
+    deterministic: true,
+    source: "fixture",
+  }, input.principal);
+}
+
+/**
+ * Draft requests retrieve the target account first, then present a
+ * model-authored checklist. The draft is never presented as observed fact.
+ */
+function draftRequest(
+  input: { objective: string; principal: Principal; selectedEntities?: EntityRef[] },
+  authorized: CapabilityDefinition[],
+): WorkPlan | undefined {
+  if (!DRAFT.test(input.objective.toLowerCase())) return undefined;
+  const capabilities = authorized.filter((item) => item.id === "cap.customers.read" || item.id === "cap.tickets.read").map((item) => item.id);
+  if (!capabilities.length) {
+    return {
+      intent: "unsupported",
+      view: "summary",
+      tasks: [],
+      unsupported: "You are not authorized to read the records this draft would be based on.",
+      deterministic: true,
+      source: "fixture",
+    };
+  }
+  // A draft for "these accounts" needs the accounts to already be in scope.
+  const named = input.objective.match(/\bcustomer-[a-z0-9-]+/i)?.[0];
+  if (!named && !input.selectedEntities?.length && /\bthese\b|\bthem\b|\bour\b/i.test(input.objective)) {
+    return {
+      intent: "clarification",
+      view: "summary",
+      tasks: [],
+      clarification: "Which account should this draft cover? Select an account first, or name it.",
+      deterministic: true,
+      source: "fixture",
+    };
+  }
+  return sanitizePlan({
+    intent: "draft",
+    view: "form",
+    tasks: [{
+      ...task("customer", "Retrieve the account context this draft must be based on.", capabilities),
+      entities: named ? [{ type: "customer" as const, id: named }] : input.selectedEntities,
+    }],
+    deterministic: true,
+    source: "fixture",
+  }, input.principal);
 }
 
 function planRequest(input: { objective: string; principal: Principal; selectedEntities?: EntityRef[]; completedCapabilities?: string[] }): PlanModelRequest {
@@ -180,6 +265,7 @@ function planFromModelJson(parsed: WorkPlan): WorkPlan {
       domain: item.domain as Domain,
       question: item.question,
       capabilities: item.capabilities ?? [],
+      entities: item.entities,
     })) : [],
     unsupported: parsed.unsupported,
     clarification: parsed.clarification,
@@ -222,6 +308,11 @@ export function sanitizePlan(plan: WorkPlan, principal: Principal): WorkPlan {
   }).slice(0, 3);
   if (plan.unsupported && !tasks.length) {
     return { ...plan, tasks: [], view: "summary", intent: "unsupported" };
+  }
+  // A targeted question is not a permission failure. Keep it distinguishable so
+  // the user is asked for the missing input instead of being told they lack access.
+  if (plan.clarification && !tasks.length) {
+    return { ...plan, tasks: [], view: "summary", intent: "clarification" };
   }
   if (!tasks.length && !plan.unsupported) {
     return { intent: "unsupported", view: "summary", tasks: [], unsupported: "You are not authorized for the capabilities this request needs.", deterministic: plan.deterministic, source: plan.source };

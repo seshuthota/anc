@@ -11,7 +11,7 @@ import { DEMO_OWNER_ID } from "@anc/policy";
 type McpResult = { structuredContent?: unknown; isError?: boolean; content?: unknown };
 
 export const TOOL_ALLOWLISTS: Record<Domain, readonly string[]> = {
-  reliability: ["get_service_health", "get_error_metrics", "get_recent_releases", "get_release_details", "list_impacted_customers", "list_open_incidents", "list_maintenance_windows"],
+  reliability: ["get_service_health", "get_service_health_series", "get_error_metrics", "get_recent_releases", "get_release_details", "list_impacted_customers", "list_open_incidents", "list_maintenance_windows"],
   product: ["get_feature_usage", "compare_usage_periods", "get_customer_feature_usage"],
   customer: ["search_customers", "get_customer", "search_support_tickets", "get_customer_support_history", "list_unassigned_escalations", "list_eligible_assignees"],
   finance: ["calculate_account_exposure", "get_subscription", "list_invoice_aging"],

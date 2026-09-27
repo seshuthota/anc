@@ -1,20 +1,11 @@
-import { A2UI_CATALOG_ID, type A2UIMessage } from "@anc/contracts";
+import { A2UI_CATALOG_ID, ActionNameSchema, type A2UIMessage } from "@anc/contracts";
+import { isA2UIComponentType } from "@anc/contracts/catalog";
 
-const KNOWN_ACTIONS = new Set([
-  "investigate",
-  "show_affected_accounts",
-  "inspect_release",
-  "inspect_account",
-  "inspect_financial_impact",
-  "show_evidence",
-  "retry_task",
-  "show_as_table",
-  "prepare_assignment",
-  "commit_assignment",
-  "select_assignee",
-]);
-
-const KNOWN_COMPONENTS = new Set(["Column", "Row", "Text", "Card", "Button", "List", "Table", "TextField"]);
+/**
+ * Derived from the contract so the validator cannot drift from the action names
+ * the runtime will later parse.
+ */
+const KNOWN_ACTIONS: ReadonlySet<string> = new Set(ActionNameSchema.options);
 
 export function validateA2UI(messages: A2UIMessage[]): string[] {
   const errors: string[] = [];
@@ -38,7 +29,10 @@ export function validateA2UI(messages: A2UIMessage[]): string[] {
         const id = String(component.id ?? "");
         if (!id) errors.push("component missing id");
         const type = String(component.component ?? "");
-        if (!KNOWN_COMPONENTS.has(type)) errors.push(`unsupported component ${type}`);
+        // Must stay in step with the renderer in apps/web/lib/a2ui.tsx, which
+        // switches on this same shared list. Accepting a component the renderer
+        // cannot draw would replace the last good workspace with a blank one.
+        if (!isA2UIComponentType(type)) errors.push(`unsupported component ${type}`);
         components.set(id, component);
         const actionName = (component.action as { event?: { name?: string | { path?: string } } } | undefined)?.event?.name;
         const bound = actionName && typeof actionName === "object" && typeof actionName.path === "string";

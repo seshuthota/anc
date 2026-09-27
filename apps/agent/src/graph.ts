@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
-import type { AgentFinding, Domain, EntityRef, InvestigationTask, PresentationInput, SemanticAction, TaskResult } from "@anc/contracts";
+import { PRESENTATION_VIEWS, type AgentFinding, type Domain, type EntityRef, type InvestigationTask, type PresentationInput, type SemanticAction, type TaskResult } from "@anc/contracts";
 import type { Principal } from "@anc/policy";
 import { DEMO_OWNER_ID, hasGrant } from "@anc/policy";
 import { peekSubstitutions } from "./execution.js";
@@ -28,6 +28,7 @@ export type GraphState = {
   surfaceId?: string;
   surfaceRevision?: number;
   view?: string;
+  clarification?: string;
 };
 
 const State = Annotation.Root({
@@ -60,6 +61,7 @@ const State = Annotation.Root({
   surfaceId: Annotation<string | undefined>(),
   surfaceRevision: Annotation<number | undefined>(),
   view: Annotation<string | undefined>(),
+  clarification: Annotation<string | undefined>(),
 });
 
 export type ActivitySink = (message: string, kind?: "agent_started" | "agent_completed" | "tool_queried" | "finding_discovered" | "task_delegated" | "investigation_completed" | "status") => void;
@@ -176,13 +178,16 @@ async function planNode(state: typeof State.State): Promise<Partial<GraphState>>
   });
   const planErrors = validatePlan(plan);
   if (planErrors.length) ctx.emit(`Plan adjusted: ${planErrors[0]}`, "status");
+  if (plan.clarification && !plan.tasks.length) {
+    ctx.emit(plan.clarification, "status");
+    return { intent: "clarification", view: "summary", clarification: plan.clarification, status: "completed" };
+  }
   if (plan.unsupported) {
     ctx.emit(plan.unsupported, "status");
     return { intent: "unsupported", view: "summary", status: "completed" };
   }
   if (!plan.tasks.length) return { intent: plan.intent, view: plan.view };
-  const selected = state.selectedEntities;
-  const planned: InvestigationTask[] = plan.tasks.map((item) => task(item.domain, item.question, selected, item.capabilities));
+  const planned: InvestigationTask[] = plan.tasks.map((item) => task(item.domain, item.question, item.entities ?? state.selectedEntities, item.capabilities));
   const intent = plan.intent;
   const seen = new Set<string>();
   const tasks: Record<string, InvestigationTask> = {};
@@ -269,8 +274,23 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
     || Object.values(state.results).some((result) => result.taskId.includes("finance") && result.status === "failed");
   const listed = ctx.store.listArtifacts(state.threadId, ctx.principal.id);
   const current = listed.filter((item) => item.runId === state.runId);
-  const artifacts = current.length ? current : listed;
-  const presentation = toPresentation(state.intent, state.objective, findings, failedFinance, failedDomains, artifacts, state.view);
+  const artifacts = [...current, ...listed.filter((item) => item.runId !== state.runId)];
+  if (state.intent === "draft" && !artifacts.some((item) => item.kind === "draft")) {
+    const draft = buildDraft(state, findings);
+    if (draft) {
+      ctx.store.saveArtifact({
+        id: `artifact-draft-${state.investigationId}`,
+        threadId: state.threadId,
+        runId: state.runId,
+        ownerId: ctx.principal.id,
+        kind: "draft",
+        payload: draft,
+        now: new Date().toISOString(),
+      });
+      artifacts.push({ id: `artifact-draft-${state.investigationId}`, kind: "draft", payload: draft, runId: state.runId });
+    }
+  }
+  const presentation = toPresentation(state.intent, state.objective, findings, failedFinance, failedDomains, artifacts, state.view, state.clarification);
   const surfaceId = `surface-${state.investigationId}`;
   const revision = (state.surfaceRevision ?? 0) + 1;
   const composed = composeA2UI(surfaceId, presentation);
@@ -306,8 +326,38 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   };
 }
 
-function routeAfterPlan(state: typeof State.State): "execute" | "compose" | typeof END {
-  if (state.status === "cancelled") return END;
+/**
+ * Builds a model-authored onboarding checklist from retrieved account context.
+ * The steps are a proposed starting point, and every unverified premise is
+ * listed as an assumption rather than being presented as fact.
+ */
+function buildDraft(state: GraphState, findings: AgentFinding[]) {
+  const customers = affectedFrom(findings);
+  const account = customers[0];
+  const name = account?.label ?? account?.id;
+  if (!name) return undefined;
+  const hasSubscription = findings.some((finding) => finding.claims.some((claim) => claim.metrics.some((metric) => /arr|subscription|invoice/i.test(metric.name))));
+  const hasTickets = findings.some((finding) => /ticket|escalation|support/i.test(finding.title));
+  return {
+    id: `draft-${state.investigationId}`,
+    title: `Onboarding checklist for ${name}`,
+    steps: [
+      { id: "context", text: `Confirm the current subscription and billing contact for ${name}.` },
+      { id: "usage", text: "Review which collaboration features the account has actually used." },
+      { id: "risks", text: hasTickets ? "Review open support history before scheduling enablement." : "Confirm there is no open support history that would delay enablement." },
+      { id: "session", text: "Schedule a first-run enablement session with the account's admin." },
+      { id: "checkpoint", text: "Set a 30-day success checkpoint with named success criteria." },
+    ],
+    assumptions: [
+      "An onboarding owner has not been assigned yet; this draft does not assign one.",
+      hasSubscription ? "Billing context was available in the retrieved records." : "Billing context was not part of the retrieved records and was not assumed.",
+      "The account timezone is UTC unless its record states otherwise.",
+    ],
+    status: "proposed" as const,
+  };
+}
+
+function routeAfterPlan(state: typeof State.State): "execute" | "compose" | typeof END {  if (state.status === "cancelled") return END;
   const pending = Object.values(state.tasks).filter((item) => item.status === "pending");
   return pending.length ? "execute" : "compose";
 }
@@ -346,12 +396,28 @@ export function toPresentation(
   failedDomains: Domain[] = [],
   artifacts: Array<{ id: string; kind: string; payload: unknown }> = [],
   view?: string,
+  clarification?: string,
 ): PresentationInput {
   const customers = affectedFrom(findings);
+  const question = clarification ?? (intent === "clarification"
+    ? "A detail is needed before this can be answered."
+    : undefined);
+  if (question) {
+    return {
+      title: "One detail is needed",
+      subtitle: question,
+      view: "summary",
+      metrics: [],
+      findings: [],
+      actions: [],
+      limitations: ["Answering now would mean guessing. Nothing has been assumed on your behalf."],
+    };
+  }
   if (!findings.length && failedDomains.length) {
     return {
       title: "Incomplete answer",
       subtitle: "One or more specialists could not complete this question.",
+      view: "summary",
       metrics: [],
       findings: [],
       actions: [],
@@ -388,14 +454,34 @@ export function toPresentation(
   const tablePayload = tableArtifact?.payload as {
     title?: string;
     columns?: string[];
-    rows?: Array<{ id: string; cells: string[]; entityType?: string; entityId?: string; actionName?: string }>;
+    rows?: Array<{ id: string; cells: string[]; sortValues?: number[]; entityType?: string; entityId?: string; actionName?: string }>;
     rowAction?: { name: string; label?: string };
+    totals?: string[];
+    completeness?: "complete" | "partial" | "empty";
+  } | undefined;
+
+  const seriesArtifact = artifacts.find((item) => item.kind === "series");
+  const seriesPayload = seriesArtifact?.payload as {
+    title?: string;
+    unit?: string;
+    points?: Array<{ label: string; value: number }>;
+  } | undefined;
+  const seriesPoints = seriesPayload?.points ?? [];
+
+  const draftArtifact = artifacts.find((item) => item.kind === "draft");
+  const draftPayload = draftArtifact?.payload as {
+    id?: string;
+    title?: string;
+    steps?: Array<{ id: string; text: string; done?: boolean }>;
+    assumptions?: string[];
+    status?: "proposed" | "edited" | "confirmed";
   } | undefined;
 
   if (intent === "unsupported") {
     return {
       title: "Not available",
       subtitle: "This workspace cannot complete that request with the current capabilities and permissions.",
+      view: "summary",
       metrics: [],
       findings: [],
       actions: [],
@@ -417,6 +503,7 @@ export function toPresentation(
     ...row,
     actionName: row.actionName ?? tablePayload?.rowAction?.name ?? actionNameFor(row.entityType),
   }));
+  const resolvedView = resolveView(view, { hasTable: rows.length > 0, hasChart: seriesPoints.length >= 2, hasDraft: Boolean(draftPayload), hasForm: intent === "prepare_assignment" || intent === "commit_assignment" });
   const quiet = !findings.some((finding) => finding.severity === "high" || finding.severity === "critical");
   const broad = isBroadObjective(objective);
   const title = tablePayload?.title
@@ -430,24 +517,67 @@ export function toPresentation(
       ? "No major supported anomaly was verified in the current window."
       : (presentationFindings[0]?.body ?? "Records from authorized tools.");
   const actions = followUpActions(rows, tablePayload?.rowAction, customers, release);
+  const numericColumn = tablePayload?.columns?.findIndex((column) => /amount|arr|minor|error|rate|count|days/i.test(column)) ?? -1;
 
   return {
     title,
     subtitle,
-    metrics: view === "table" ? [] : metrics.slice(0, broad ? 3 : 4),
+    view: resolvedView,
+    metrics: resolvedView === "table" ? [] : metrics.slice(0, broad ? 3 : 4),
     findings: presentationFindings,
+    chart: seriesPoints.length >= 2 ? {
+      id: seriesArtifact!.id,
+      title: seriesPayload?.title ?? "Service trend",
+      unit: seriesPayload?.unit === "ratio" ? "error rate" : (seriesPayload?.unit ?? "count"),
+      points: seriesPoints,
+      caption: "Bucketed from authorized telemetry. Each point is an aggregate, not a single request.",
+    } : undefined,
     table: rows.length && wantsTable ? {
       id: tableArtifact?.id ?? "records",
       columns: tablePayload?.columns ?? ["Account", "ID"],
       rows,
+      totals: tablePayload?.totals,
+      completeness: tablePayload?.completeness ?? (rows.length >= 25 ? "partial" : "complete"),
+      defaultSort: resolvedView === "comparison" && numericColumn >= 0 ? numericColumn : 0,
+    } : undefined,
+    draft: draftPayload?.steps?.length ? {
+      id: draftPayload.id ?? draftArtifact!.id,
+      title: draftPayload.title ?? "Proposed draft",
+      steps: draftPayload.steps,
+      assumptions: draftPayload.assumptions ?? [],
+      status: draftPayload.status ?? "proposed",
+    } : undefined,
+    selection: resolvedView === "comparison" && rows.length > 1 ? {
+      id: `${tableArtifact?.id ?? "records"}-selection`,
+      label: "Narrow this comparison to selected accounts",
+      options: rows.slice(0, 12).map((row) => ({ id: row.entityId ?? row.id, label: String(row.cells[0] ?? row.id) })),
+      selected: customers.slice(0, 1).map((entity) => entity.id),
     } : undefined,
     actions,
     limitations: [
       financeFailed ? "Financial information is unavailable for this run." : "",
       broad ? "Root cause is not confirmed." : "",
+      draftPayload ? "The draft below is model-authored. It is not an observed fact and nothing has been executed." : "",
       objective ? `Question: ${objective}` : "",
     ].filter(Boolean),
   };
+}
+
+/**
+ * Chooses the layout. The planner's `view` wins when it names a supported one;
+ * otherwise the shape of the available artifacts decides, so a new capability
+ * still composes into a sensible surface without a planner branch.
+ */
+function resolveView(
+  view: string | undefined,
+  available: { hasTable: boolean; hasChart: boolean; hasDraft: boolean; hasForm: boolean },
+): PresentationInput["view"] {
+  if (view && (PRESENTATION_VIEWS as readonly string[]).includes(view)) return view as PresentationInput["view"];
+  if (available.hasForm) return "form";
+  if (available.hasDraft) return "form";
+  if (available.hasChart) return "trend";
+  if (available.hasTable) return "table";
+  return "summary";
 }
 
 function actionNameFor(entityType?: string): string {

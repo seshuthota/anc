@@ -38,6 +38,12 @@ export function registerCompanyTools(server: any, db: Database.Database) {
     const rows = db.prepare(`SELECT service, SUM(requests) requests, SUM(errors) errors, ROUND(CAST(SUM(errors) AS REAL)/NULLIF(SUM(requests),0), 6) errorRate FROM service_metrics WHERE service = ? AND bucket >= ? AND bucket < ? GROUP BY service`).all(args.service, args.window.from, args.window.to);
     return run('get_service_health', args, { rows }, args.window, { observationWindow: args.window, aggregationGrain: 'requested window' });
   });
+  server.registerTool('get_service_health_series', { description: 'Read a service error-rate time series bucketed over a time window, for trend and timeline views.', inputSchema: z.object({ service: z.string().default('sync-service'), window: windowSchema, metric: z.enum(['errorRate', 'requests', 'errors']).default('errorRate') }) }, (args: any) => {
+    const rows = db.prepare(`SELECT bucket, SUM(requests) requests, SUM(errors) errors, ROUND(CAST(SUM(errors) AS REAL)/NULLIF(SUM(requests),0), 6) errorRate
+      FROM service_metrics WHERE service = ? AND bucket >= ? AND bucket < ?
+      GROUP BY bucket ORDER BY bucket`).all(args.service, args.window.from, args.window.to);
+    return run('get_service_health_series', args, { metric: args.metric, points: rows }, args.window, { observationWindow: args.window, aggregationGrain: 'bucket' });
+  });
   server.registerTool('get_error_metrics', { description: 'Aggregate errors by signature, cohort, and customer for a time window.', inputSchema: z.object({ service: z.string().default('sync-service'), window: windowSchema, cohort: z.string().optional() }) }, (args: any) => {
     const rows = db.prepare(`SELECT error_signature signature, cohort, SUM(requests) requests, SUM(errors) errors, ROUND(CAST(SUM(errors) AS REAL)/NULLIF(SUM(requests),0), 6) errorRate, COUNT(DISTINCT customer_id) customers FROM service_metrics WHERE service = ? AND bucket >= ? AND bucket < ? AND (? IS NULL OR cohort = ?) GROUP BY error_signature, cohort ORDER BY errors DESC`).all(args.service, args.window.from, args.window.to, args.cohort ?? null, args.cohort ?? null);
     return run('get_error_metrics', args, { rows }, { ...args.window, cohort: args.cohort }, { observationWindow: args.window, aggregationGrain: 'signature/cohort' });

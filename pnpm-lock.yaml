@@ -97,6 +97,9 @@ importers:
       '@ag-ui/client':
         specifier: ^1.0.0
         version: 1.0.0
+      '@anc/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@anc/policy':
         specifier: workspace:*
         version: link:../../packages/policy

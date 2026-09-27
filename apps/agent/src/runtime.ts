@@ -5,7 +5,9 @@ import { SemanticActionSchema, type EntityRef, type SemanticAction } from "@anc/
 import { DEFAULT_RUNTIME_DB_PATH, openRuntimeDatabase, RuntimeStore } from "@anc/runtime-storage";
 import { peekSubstitutions, takeSubstitutions, type SpecialistSubstitution } from "./execution.js";
 import { publishEvent } from "./events.js";
-import { createInvestigationGraph, graphContexts, type ActivitySink, type GraphState } from "./graph.js";
+import { createInvestigationGraph, graphContexts, toPresentation, type ActivitySink, type GraphState } from "./graph.js";
+import { composeA2UI } from "./composer.js";
+import { validateA2UI } from "./a2ui-validate.js";
 import { resolveExecutionMode, resolveModelConfig } from "./provider.js";
 import { assertUsdBudgetCanBeEnforced, priceCost, takeUsage, type ModelUsage } from "./usage.js";
 import { DEMO_OWNER_ID, redactForPrincipal, resolvePrincipal, sessionThreadId, withoutGrants, type Principal } from "@anc/policy";
@@ -380,6 +382,12 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
   if (action.name === "select_assignee") {
     return current;
   }
+  if (action.name === "set_selection") {
+    return applySelection({ threadId, principal, action });
+  }
+  if (action.name === "save_draft") {
+    return saveDraftEdits({ threadId, principal, action, current });
+  }
   const question = action.name === "show_affected_accounts"
     ? "Who is affected?"
     : action.name === "inspect_release"
@@ -404,4 +412,105 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
     action,
     entities,
   });
+}
+
+/**
+ * Narrows the thread to the records the user selected and re-runs the current
+ * objective against them, so "only these accounts" carries into the follow-up.
+ */
+async function applySelection(input: { threadId: string; principal: Principal; action: SemanticAction }): Promise<PublicState> {
+  const selected = Array.isArray(input.action.parameters.selected) ? input.action.parameters.selected.map(String) : [];
+  const entities: EntityRef[] = selected.map((id) => ({ type: "customer" as const, id }));
+  store.setThreadState({
+    threadId: input.threadId,
+    selectedEntities: entities,
+    status: "running",
+    now: new Date().toISOString(),
+    ownerId: input.principal.id,
+  });
+  store.appendActivity({
+    id: randomUUID(),
+    threadId: input.threadId,
+    message: selected.length ? `Narrowed scope to ${selected.length} selected record(s)` : "Selection cleared",
+    kind: "action",
+    now: new Date().toISOString(),
+    ownerId: input.principal.id,
+  });
+  const thread = store.getThreadState(input.threadId);
+  const question = String(thread?.investigationId ?? "Review the selected records.");
+  return runInvestigation({
+    question: selected.length ? `Review only these records: ${selected.join(", ")}` : question,
+    threadId: input.threadId,
+    principal: input.principal,
+    entities,
+  });
+}
+
+/**
+ * Persists user edits to a model-authored draft. Edits are stored as an
+ * `edited` draft rather than promoted to an observed finding, and a draft is
+ * never treated as an executed operation.
+ */
+function saveDraftEdits(input: { threadId: string; principal: Principal; action: SemanticAction; current: PublicState }): PublicState {
+  const draftId = String(input.action.parameters.draftId ?? "");
+  const artifacts = store.listArtifacts(input.threadId, input.principal.id);
+  const artifact = artifacts.find((item) => item.kind === "draft" && (item.id === draftId || String((item.payload as { id?: string })?.id) === draftId));
+  if (!artifact) throw new Error("Draft not found");
+  const payload = artifact.payload as { id: string; title: string; steps: Array<{ id: string; text: string; done?: boolean }>; assumptions: string[] };
+  const clientFields = (input.action.parameters.clientFields ?? {}) as Record<string, string>;
+  const clientSelections = (input.action.parameters.clientSelections ?? {}) as Record<string, string[]>;
+  const completed = new Set(clientSelections[draftId] ?? clientSelections[payload.id] ?? []);
+  const steps = payload.steps.map((step) => {
+    const edited = clientFields[`draft_text_${step.id}`];
+    return { ...step, text: typeof edited === "string" && edited.trim() ? edited : step.text, done: completed.has(step.id) || step.done };
+  });
+  const next = { ...payload, steps, status: "edited" as const };
+  store.saveArtifact({
+    id: artifact.id,
+    threadId: input.threadId,
+    runId: artifact.runId ?? undefined,
+    ownerId: input.principal.id,
+    kind: "draft",
+    payload: next,
+    now: new Date().toISOString(),
+  });
+  store.appendActivity({
+    id: randomUUID(),
+    threadId: input.threadId,
+    message: `Saved edits to draft ${payload.title}`,
+    kind: "action",
+    now: new Date().toISOString(),
+    ownerId: input.principal.id,
+  });
+  const state = publicState(input.threadId, input.principal.id);
+  const surface = state.surface;
+  if (!surface) return state;
+  const stored = store.getSurface(surface.surfaceId, surface.revision);
+  if (!stored) return state;
+  const presentation = toPresentation(
+    String((surface.dataModel as { view?: string })?.view ?? "form"),
+    "Saved draft",
+    [],
+    false,
+    [],
+    store.listArtifacts(input.threadId, input.principal.id),
+    "form",
+  );
+  const composed = composeA2UI(surface.surfaceId, presentation);
+  if (validateA2UI(composed.messages).length) return state;
+  store.saveSurface({
+    surfaceId: surface.surfaceId,
+    revision: surface.revision + 1,
+    threadId: input.threadId,
+    investigationId: stored.investigationId,
+    runId: state.runId ?? undefined,
+    ownerId: input.principal.id,
+    title: presentation.title,
+    messages: composed.messages,
+    dataModel: composed.dataModel,
+    findingIds: stored.findingIds,
+    requiredGrants: stored.requiredGrants,
+    now: new Date().toISOString(),
+  });
+  return publicState(input.threadId, input.principal.id);
 }

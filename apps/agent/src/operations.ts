@@ -49,6 +49,7 @@ export async function prepareTicketAssignment(input: {
     const presentation = {
       title: "Assign ticket",
       subtitle: payload.preview,
+      view: "form" as const,
       metrics: [],
       findings: [],
       form: {
@@ -141,6 +142,7 @@ function receiptSurface(store: RuntimeStore, threadId: string, ownerId: string, 
   saveGeneratedSurface(store, threadId, ownerId, {
     title: "Assignment receipt",
     subtitle: summary,
+    view: "form",
     metrics: [],
     findings: [],
     receipt: { operationId, status, summary },

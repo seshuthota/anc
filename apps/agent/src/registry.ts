@@ -11,6 +11,8 @@ export type CapabilityDefinition = {
   core?: boolean;
   rowEntity?: string;
   rowAction?: { name: string; requiredGrant: CapabilityId };
+  /** Marks a capability whose result is a time series, which composes as a trend view. */
+  series?: string;
   inputSchema: Record<string, unknown>;
 };
 
@@ -30,6 +32,7 @@ const jsonObject = (properties: Record<string, unknown>, required: string[] = []
 
 export const CAPABILITIES: CapabilityDefinition[] = [
   { id: "cap.service.health", tool: "get_service_health", domain: "reliability", description: "Service health metrics", sideEffect: "read", core: true, inputSchema: jsonObject({ service: { type: "string" }, window: { type: "object" } }) },
+  { id: "cap.service.trend", tool: "get_service_health_series", domain: "reliability", description: "Service error-rate trend over time", sideEffect: "read", series: "errorRate", inputSchema: jsonObject({ service: { type: "string" }, window: { type: "object" }, metric: { type: "string", enum: ["errorRate", "requests", "errors"] } }) },
   { id: "cap.service.errors", tool: "get_error_metrics", domain: "reliability", description: "Error metrics by signature", sideEffect: "read", core: true, inputSchema: jsonObject({ service: { type: "string" }, window: { type: "object" }, cohort: { type: "string" } }) },
   { id: "cap.releases.read", tool: "get_recent_releases", domain: "reliability", description: "Recent releases", sideEffect: "read", core: true, inputSchema: jsonObject({ window: { type: "object" }, service: { type: "string" } }) },
   { id: "cap.customers.impact", tool: "list_impacted_customers", domain: "reliability", description: "Impacted customers from telemetry", sideEffect: "read", core: true, inputSchema: jsonObject({ service: { type: "string" }, window: { type: "object" } }) },

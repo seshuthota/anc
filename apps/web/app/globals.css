@@ -40,6 +40,30 @@ button { cursor:pointer; }
 .a2ui-row { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); }
 .a2ui-col { display:flex; flex-direction:column; gap:10px; }
 .a2ui-list { display:flex; flex-direction:column; gap:8px; }
+.a2ui-table-wrap { background:#fff; border:1px solid var(--line); border-radius:10px; overflow-x:auto; padding:4px; }
+.a2ui-table { border-collapse:collapse; font-size:12px; min-width:100%; }
+.a2ui-table th, .a2ui-table td { border-bottom:1px solid var(--line); padding:9px 12px; text-align:left; vertical-align:top; }
+.a2ui-table th { background:#f7f8fa; color:var(--muted); font-size:10px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; }
+.a2ui-table tbody tr:hover { background:#fafbfd; }
+.a2ui-table tfoot td { background:#f7f8fa; font-weight:650; }
+.a2ui-sort { background:none; border:0; color:inherit; font:inherit; letter-spacing:inherit; padding:0; text-transform:inherit; }
+.a2ui-sort:hover { color:var(--blue); }
+.a2ui-table-note { color:var(--amber); font-size:11px; margin:8px 12px; }
+.a2ui-field { display:flex; flex-direction:column; gap:4px; margin:6px 0; }
+.a2ui-field-label { color:var(--muted); font-size:11px; }
+.a2ui-input { background:#fff; border:1px solid #dce1e8; border-radius:7px; font-size:13px; padding:8px 10px; width:100%; }
+.a2ui-field-edited { color:var(--blue); font-size:10px; }
+.a2ui-check { align-items:center; display:flex; font-size:12px; gap:7px; margin:5px 0; }
+.a2ui-chart { background:#fff; border:1px solid var(--line); border-radius:10px; margin:0; padding:16px; }
+.a2ui-chart figcaption { font-size:12px; font-weight:650; margin-bottom:10px; }
+.a2ui-chart svg { height:170px; width:100%; }
+.a2ui-chart-line { stroke:var(--blue); stroke-width:2; vector-effect:non-scaling-stroke; }
+.a2ui-chart-point { fill:#fff; stroke:var(--blue); stroke-width:2; vector-effect:non-scaling-stroke; }
+.a2ui-chart-zero { stroke:#c9ced6; stroke-dasharray:4 4; stroke-width:1; vector-effect:non-scaling-stroke; }
+.a2ui-chart-axis { color:var(--muted); display:flex; font-size:10px; justify-content:space-between; margin-top:6px; }
+.a2ui-chart-caption { color:var(--muted); font-size:11px; margin:8px 0 0; }
+.a2ui-unsupported { color:var(--red); font-size:11px; }
+.visually-hidden { clip:rect(0 0 0 0); clip-path:inset(50%); height:1px; overflow:hidden; position:absolute; white-space:nowrap; width:1px; }
 .ghost { background:#fff; border:1px solid var(--line); border-radius:8px; color:var(--ink); font-size:12px; padding:6px 10px; }
 .history { display:block; margin:6px 0; text-align:left; width:100%; }
 .drawer { background:#19202b66; inset:0; position:fixed; z-index:20; }

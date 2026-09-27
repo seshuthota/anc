@@ -12,7 +12,9 @@ export const ActionNameSchema = z.enum([
   "show_as_table",
   "prepare_assignment",
   "commit_assignment",
-  "select_assignee"
+  "select_assignee",
+  "save_draft",
+  "set_selection"
 ]);
 
 export const SemanticActionSchema = z.object({

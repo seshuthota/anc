@@ -102,4 +102,60 @@ describe("capability-grounded planner", () => {
     expect(plan.tasks.some((item) => item.capabilities.includes("cap.finance.invoices"))).toBe(true);
     expect(peekSubstitutions("run-plan-fallback").some((item) => item.specialist === "planner")).toBe(true);
   });
+
+  it("keeps a clarification distinguishable from a permission denial", async () => {
+    const { sanitizePlan } = await import("./planner.js");
+    const plan = sanitizePlan({
+      intent: "work",
+      view: "summary",
+      deterministic: false,
+      source: "live",
+      tasks: [],
+      clarification: "Which account should this cover?",
+    }, resolvePrincipal("user-finance"));
+    expect(plan.intent).toBe("clarification");
+    expect(plan.clarification).toBe("Which account should this cover?");
+    expect(plan.unsupported).toBeUndefined();
+  });
+
+  it("still reports a genuine authorization failure as unsupported", async () => {
+    const { sanitizePlan } = await import("./planner.js");
+    const plan = sanitizePlan({
+      intent: "work",
+      view: "summary",
+      deterministic: false,
+      source: "live",
+      tasks: [{ domain: "finance", question: "Invoices", capabilities: ["cap.finance.invoices"] }],
+    }, resolvePrincipal("user-support"));
+    expect(plan.intent).toBe("unsupported");
+    expect(plan.unsupported).toMatch(/not authorized/i);
+  });
+
+  it("asks which account a draft should cover instead of guessing", async () => {
+    const plan = await proposePlan({ objective: "Draft an onboarding checklist for these accounts", principal: resolvePrincipal("user-coo") });
+    expect(plan.intent).toBe("clarification");
+    expect(plan.clarification).toBeTruthy();
+    expect(plan.unsupported).toBeUndefined();
+  });
+
+  it("schedules the series capability and a trend view for a trend request", async () => {
+    const plan = await proposePlan({ objective: "Show me the error rate trend over the past week", principal: resolvePrincipal("user-ops") });
+    expect(plan.view).toBe("trend");
+    expect(plan.tasks.some((item) => item.capabilities.includes("cap.service.trend"))).toBe(true);
+  });
+
+  it("refuses a trend request when telemetry is not granted", async () => {
+    const plan = await proposePlan({ objective: "Show me the error rate trend over the past week", principal: resolvePrincipal("user-finance") });
+    expect(plan.tasks.some((item) => item.capabilities.includes("cap.service.trend"))).toBe(false);
+  });
+
+  it("asks for a comparison view on an invoice comparison request", async () => {
+    const plan = await proposePlan({ objective: "Compare overdue invoices by customer", principal: resolvePrincipal("user-finance") });
+    expect(plan.view).toBe("comparison");
+  });
+
+  it("keeps the queue view for an unassigned escalation request", async () => {
+    const plan = await proposePlan({ objective: "Show unassigned escalations", principal: resolvePrincipal("user-support") });
+    expect(plan.view).toBe("queue");
+  });
 });
