@@ -28,7 +28,6 @@ const STOP = new Set(["about", "should", "what", "know", "this", "that", "with",
 const BROAD = /attention|this morning|start of the day|going on with the company|need to know|care about|anything on fire|brief me|overnight|unusual/;
 const UNSUPPORTED_WRITE = /refund|wire|pay out|payout|reimburse|remit|transfer funds|send money|payroll|send email to all customers|delete all/;
 const TREND = /trend|over time|this week|last week|over the past|timeline|history of|each day|daily|chart|graph/;
-const COMPARISON = /compare|comparison|versus|vs\.?|side by side|breakdown|by customer|ranking|which customers/;
 const DRAFT = /draft|checklist|onboarding|propose|write a|prepare a|plan for/;
 /** The assignment *verb* in verb form, so "unassigned", "assignee" and "no owner" do not match. */
 const WRITE_INTENT = /(?<![a-z])assign(?![a-z])|(?<![a-z])reassign(?![a-z])|\bset an? (owner|assignee)\b/;

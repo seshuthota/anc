@@ -74,13 +74,11 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
 
   if (presentation.draft) {
     const draftId = presentation.draft.id;
-    const stepFields: string[] = [];
     rootChildren.push("draft_block");
     components.push({ id: "draft_block", component: "Column", children: ["draft_title", "draft_status", ...presentation.draft.steps.flatMap((_, index) => [`draft_text_${index}`, `draft_done_${index}`]), "draft_assumptions", "draft_save"] });
     components.push({ id: "draft_title", component: "Text", text: { path: "/draft/title" }, variant: "h3" });
     components.push({ id: "draft_status", component: "Text", text: { path: "/draft/statusLabel" }, variant: "caption" });
     presentation.draft.steps.forEach((step, index) => {
-      stepFields.push(`draft_text_${index}`);
       components.push({
         id: `draft_text_${index}`,
         component: "TextField",
