@@ -1,9 +1,15 @@
 import { z } from "zod";
 
 export const EnvSchema = z.object({
-  MODEL_PROVIDER: z.string().min(1).default("openai"),
-  MODEL_ID: z.string().min(1).default("gpt-4.1-mini"),
+  MODEL_PROVIDER: z.enum(["fixture", "explabs", "xai", "openai"]).default("fixture"),
+  MODEL_EXECUTION_MODE: z.enum(["fixture", "live-strict", "live-fallback"]).optional(),
+  MODEL_ID: z.string().min(1).default("gpt-oss-120b"),
+  INVESTIGATION_STEP_DELAY_MS: z.coerce.number().int().nonnegative().optional(),
   MODEL_API_KEY: z.string().optional(),
+  XAI_API_KEY: z.string().optional(),
+  EXPLABS_API_KEY: z.string().optional(),
+  EXPLABS_BASE_URL: z.string().optional(),
+  EXPLABS_MODEL: z.string().optional(),
   COMPANY_DB_PATH: z.string().min(1).default("./data/company.sqlite"),
   RUNTIME_DB_PATH: z.string().min(1).default("./data/runtime.sqlite"),
   DATASET_VERSION: z.string().min(1).default("sync-regression-v1"),

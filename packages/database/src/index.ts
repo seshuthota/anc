@@ -15,4 +15,4 @@ export function openCompanyDatabase(path: string, readOnly = false): CompanyData
 }
 
 export { schemaSql, SCHEMA_VERSION };
-export { seedDatabase, seedScenario } from './seed.js';
+export { seedDatabase, seedScenario, type SeedScenario } from './seed.js';

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const schemaSql = /* sql */ `
 PRAGMA foreign_keys = ON;
@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS feature_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_feature_usage_bucket ON feature_usage(bucket);
 CREATE INDEX IF NOT EXISTS idx_feature_usage_customer ON feature_usage(customer_id);
+CREATE TABLE IF NOT EXISTS employees (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  team TEXT NOT NULL,
+  title TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS support_tickets (
   id TEXT PRIMARY KEY,
   customer_id TEXT NOT NULL REFERENCES customers(id),
@@ -73,7 +79,10 @@ CREATE TABLE IF NOT EXISTS support_tickets (
   category TEXT NOT NULL,
   status TEXT NOT NULL,
   subject TEXT NOT NULL,
-  body TEXT NOT NULL
+  body TEXT NOT NULL,
+  assignee_id TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_support_tickets_customer ON support_tickets(customer_id);
 CREATE TABLE IF NOT EXISTS invoices (
@@ -90,6 +99,13 @@ CREATE TABLE IF NOT EXISTS incidents (
   ended_at TEXT,
   service TEXT NOT NULL,
   severity TEXT NOT NULL,
+  summary TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+  id TEXT PRIMARY KEY,
+  service TEXT NOT NULL,
+  starts_at TEXT NOT NULL,
+  ends_at TEXT,
   summary TEXT NOT NULL
 );
 `;

@@ -13,7 +13,8 @@ export const InvestigationTaskSchema = z.object({
   window: TimeWindowSchema.optional(),
   dependencies: z.array(z.string().min(1)).default([]),
   status: TaskStatusSchema,
-  attemptCount: z.number().int().nonnegative().default(0)
+  attemptCount: z.number().int().nonnegative().default(0),
+  capabilities: z.array(z.string().min(1)).default([])
 });
 
 export const TaskResultSchema = z.object({

@@ -8,7 +8,11 @@ export const ActionNameSchema = z.enum([
   "inspect_account",
   "inspect_financial_impact",
   "show_evidence",
-  "retry_task"
+  "retry_task",
+  "show_as_table",
+  "prepare_assignment",
+  "commit_assignment",
+  "select_assignee"
 ]);
 
 export const SemanticActionSchema = z.object({

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { z } from 'zod';
 import { DATASET_VERSION, DEMO_CLOCK } from '@anc/database';
+import { assertToolAllowed, redactForPrincipal, resolvePrincipal } from '@anc/policy';
 
 const iso = z.string().datetime({ offset: true });
 const windowSchema = z.object({ from: iso, to: iso }).refine(v => Date.parse(v.from) < Date.parse(v.to), 'from must be before to');
@@ -27,7 +28,11 @@ export function asMcpResult(evidence: EvidenceEnvelope) {
 }
 
 export function registerCompanyTools(server: any, db: Database.Database) {
-  const run = (tool: string, args: unknown, result: unknown, filters: unknown, extra?: Partial<EvidenceEnvelope>) => asMcpResult(envelope(tool, args, result, filters, extra));
+  const run = (tool: string, args: unknown, result: unknown, filters: unknown, extra?: Partial<EvidenceEnvelope>) => {
+    const principal = resolvePrincipal(process.env.ANC_PRINCIPAL_ID);
+    assertToolAllowed(principal, tool);
+    return asMcpResult(redactForPrincipal(principal, envelope(tool, args, result, filters, extra)));
+  };
 
   server.registerTool('get_service_health', { description: 'Read weighted service health metrics for a service and time window.', inputSchema: z.object({ service: z.string().default('sync-service'), window: windowSchema }) }, (args: any) => {
     const rows = db.prepare(`SELECT service, SUM(requests) requests, SUM(errors) errors, ROUND(CAST(SUM(errors) AS REAL)/NULLIF(SUM(requests),0), 6) errorRate FROM service_metrics WHERE service = ? AND bucket >= ? AND bucket < ? GROUP BY service`).all(args.service, args.window.from, args.window.to);
@@ -45,6 +50,10 @@ export function registerCompanyTools(server: any, db: Database.Database) {
     const release = db.prepare('SELECT * FROM releases WHERE id = ?').get(args.releaseId); if (!release) throw new Error(`Unknown release: ${args.releaseId}`);
     const rollouts = db.prepare('SELECT * FROM release_rollouts WHERE release_id = ? ORDER BY started_at').all(args.releaseId);
     return run('get_release_details', args, { release, rollouts }, { releaseId: args.releaseId });
+  });
+  server.registerTool('list_impacted_customers', { description: 'List customers whose weighted error rate exceeds a threshold in a window.', inputSchema: z.object({ service: z.string().default('sync-service'), window: windowSchema, cohort: z.string().optional(), minErrorRate: z.number().min(0).max(1).default(0.05) }) }, (args: any) => {
+    const rows = db.prepare(`SELECT customer_id customerId, SUM(requests) requests, SUM(errors) errors, ROUND(CAST(SUM(errors) AS REAL)/NULLIF(SUM(requests),0), 6) errorRate FROM service_metrics WHERE service = ? AND bucket >= ? AND bucket < ? AND (? IS NULL OR cohort = ?) GROUP BY customer_id HAVING errorRate >= ? ORDER BY errors DESC`).all(args.service, args.window.from, args.window.to, args.cohort ?? null, args.cohort ?? null, args.minErrorRate);
+    return run('list_impacted_customers', args, { rows, customerIds: (rows as any[]).map((row) => row.customerId) }, { ...args.window, cohort: args.cohort, minErrorRate: args.minErrorRate }, { observationWindow: args.window, aggregationGrain: 'customer' });
   });
   server.registerTool('get_feature_usage', { description: 'Aggregate feature usage by day and cohort/customer.', inputSchema: z.object({ feature: z.string().default('synchronization'), window: windowSchema, customerIds: z.array(z.string()).max(100).optional() }) }, (args: any) => {
     const ids = args.customerIds ?? []; const placeholders = ids.map(() => '?').join(',');
@@ -86,5 +95,46 @@ export function registerCompanyTools(server: any, db: Database.Database) {
   });
   server.registerTool('get_subscription', { description: 'Read the active subscription for one customer.', inputSchema: z.object({ customerId: z.string().min(1) }) }, (args: any) => {
     const row = db.prepare('SELECT * FROM subscriptions WHERE customer_id = ? AND status = ?').get(args.customerId, 'active'); if (!row) throw new Error(`No active subscription for: ${args.customerId}`); return run('get_subscription', args, row, { customerId: args.customerId }, { currency: 'USD', units: 'minor currency units' });
+  });
+  server.registerTool('list_open_incidents', { description: 'List currently open incidents.', inputSchema: z.object({ service: z.string().optional() }) }, (args: any) => {
+    const rows = db.prepare(`SELECT id, started_at startedAt, ended_at endedAt, service, severity, summary FROM incidents WHERE ended_at IS NULL AND (? IS NULL OR service = ?) ORDER BY started_at DESC`).all(args.service ?? null, args.service ?? null);
+    return run('list_open_incidents', args, { rows }, { service: args.service });
+  });
+  server.registerTool('list_maintenance_windows', { description: 'List maintenance windows that have not ended.', inputSchema: z.object({ service: z.string().optional() }) }, (args: any) => {
+    const rows = db.prepare(`SELECT id, service, starts_at startsAt, ends_at endsAt, summary FROM maintenance_windows WHERE ends_at IS NULL AND (? IS NULL OR service = ?) ORDER BY starts_at DESC`).all(args.service ?? null, args.service ?? null);
+    return run('list_maintenance_windows', args, { rows }, { service: args.service });
+  });
+  server.registerTool('list_invoice_aging', { description: 'List overdue or open invoices with deterministic aging buckets.', inputSchema: z.object({ asOf: iso.optional(), customerIds: z.array(z.string()).max(100).optional() }) }, (args: any) => {
+    const asOf = args.asOf ?? DEMO_CLOCK;
+    const ids = args.customerIds ?? [];
+    const filter = ids.length ? `AND customer_id IN (${ids.map(() => '?').join(',')})` : '';
+    const rows = db.prepare(`SELECT id, customer_id customerId, issued_at issuedAt, amount_minor_units amountMinorUnits, currency, status,
+      CAST(julianday(?) - julianday(issued_at) AS INTEGER) daysOutstanding
+      FROM invoices WHERE status IN ('open','overdue') ${filter} ORDER BY daysOutstanding DESC`).all(asOf, ...ids) as any[];
+    const totals = rows.reduce((sum, row) => sum + Number(row.amountMinorUnits ?? 0), 0);
+    return run('list_invoice_aging', args, { asOf, rows, totals: { amountMinorUnits: totals, currency: 'USD', count: rows.length } }, { asOf, customerIds: ids }, { currency: 'USD', units: 'minor currency units' });
+  });
+  server.registerTool('list_unassigned_escalations', { description: 'List open unassigned support tickets.', inputSchema: z.object({ category: z.string().optional(), page: pageSchema.optional() }) }, (args: any) => {
+    const page = args.page ?? { limit: 25, offset: 0 };
+    const rows = db.prepare(`SELECT id, customer_id customerId, created_at createdAt, category, status, subject, assignee_id assigneeId, version
+      FROM support_tickets WHERE status = 'open' AND assignee_id IS NULL AND (? IS NULL OR category = ?)
+      ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(args.category ?? null, args.category ?? null, page.limit, page.offset);
+    return run('list_unassigned_escalations', args, { rows, page }, { category: args.category });
+  });
+  server.registerTool('list_eligible_assignees', { description: 'List employees eligible to own a support ticket.', inputSchema: z.object({ team: z.string().default('support') }) }, (args: any) => {
+    const rows = db.prepare('SELECT id, name, team, title FROM employees WHERE team = ? ORDER BY name').all(args.team);
+    return run('list_eligible_assignees', args, { rows }, { team: args.team });
+  });
+  server.registerTool('commit_ticket_assignment', { description: 'Assign an open ticket to an eligible owner using an expected version.', inputSchema: z.object({ ticketId: z.string().min(1), assigneeId: z.string().min(1), expectedVersion: z.number().int().positive() }) }, (args: any) => {
+    const ticket = db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(args.ticketId) as { id: string; version: number; assignee_id: string | null } | undefined;
+    if (!ticket) throw new Error(`Unknown ticket: ${args.ticketId}`);
+    const owner = db.prepare('SELECT id FROM employees WHERE id = ? AND team = ?').get(args.assigneeId, 'support');
+    if (!owner) throw new Error(`Assignee ${args.assigneeId} is not eligible`);
+    const now = new Date().toISOString();
+    const result = db.prepare('UPDATE support_tickets SET assignee_id = ?, version = version + 1, updated_at = ?, status = ? WHERE id = ? AND version = ?')
+      .run(args.assigneeId, now, 'open', args.ticketId, args.expectedVersion);
+    if (!result.changes) throw new Error('Ticket version is stale');
+    const updated = db.prepare('SELECT id, customer_id customerId, assignee_id assigneeId, version, status, updated_at updatedAt FROM support_tickets WHERE id = ?').get(args.ticketId);
+    return run('commit_ticket_assignment', args, { before: ticket, after: updated }, args);
   });
 }

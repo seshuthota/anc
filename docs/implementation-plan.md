@@ -1,373 +1,302 @@
-# Agent-Native Enterprise Workspace: implementation plan
+# Agent-native enterprise workspace: implementation roadmap
 
-Status: proposed; implementation has not started.
-Source: [original specification](../idea.md).
-Prepared: 2026-09-20.
+Updated: 2026-09-23. Status: P0–P5 local slice is in the tree. Live planning asks the model for a plan and then validates it; fixture mode remains the default. Authenticated sessions use OpenID Connect when `AUTH_MODE=oidc`. Deployment controls, grant revocation, retention, backups, cost reporting, and an external read/write connector are in the tree and stay inactive until their environment is set. No production identity provider or customer system is configured in this workspace. The four-person unfamiliar-user study is still open. Shared employee sessions and autonomous background work stay deferred.
 
-## 1. Outcome and scope
+This is the active roadmap. It supersedes the investigation-only scope in the [original specification](../idea.md). The previous plan is preserved in the [historical archive](archive/investigation-mvp-plan-2026-09-20.md); its completion markers are historical claims, not a fresh audit. The [architecture](architecture.md), [demo](demo-scenario.md), and [evaluation report](evaluation-results.md) describe the existing implementation rather than the full target below.
 
-Build a local, read-only application for a fictional SaaS company. A person asks a business question; specialist agents investigate through MCP; the runtime retains evidence and findings; a composer produces an A2UI workspace that supports follow-up investigation.
+Basis: source inspection and existing evaluation documentation. Tests, browser flows, and live evaluations were not rerun for this planning update.
 
-The first demonstration must support this sequence without predefined business pages:
+## 1. Product objective
 
-1. “What should I care about this morning?”
-2. “Why is this happening?”
-3. “Who is affected?”
-4. Select an account and inspect its usage, support history, and ARR.
-5. Open the evidence supporting a claim.
-6. Refresh and continue from saved state.
+Build one enterprise workspace that any authorized employee can use to accomplish business tasks through natural language. Specialized agents use company tools/MCPs, collaborate through shared runtime state, and dynamically assemble the information, workflows, and interface appropriate to the user's intent, context, and permissions.
 
-The experiment succeeds when an unfamiliar user can answer those questions and verify the answers. A changing layout alone is insufficient.
+An operations head, finance head, support head, and COO use the same shell. Role informs relevance and defaults; it does not prescribe a dashboard or limit the user to one business domain. Permissions are separate, enforced constraints. A job title must not implicitly grant unrestricted access.
 
-Retain the specified stack: TypeScript, pnpm, Next.js/React, CopilotKit, AG-UI, A2UI, LangGraph, official MCP TypeScript SDK v2, SQLite, and Zod. Validate and pin compatible versions in the first milestone. Do not invent a UI protocol if an integration proves awkward.
+Investigation remains one regression scenario. The product also supports retrieving records, comparisons, preparing work, editing drafts, and executing permitted business operations. Generated UI must support interaction, not merely display an answer.
 
-Exclude authentication, production roles, company-changing operations, external SaaS integrations, arbitrary SQL, vector databases, distributed infrastructure, long-term agent memory, and deployment work. Local runtime persistence is in scope. Bind development services to localhost and use synthetic data only.
+### Fixed foundation and generated experience
 
-## 2. Architecture and responsibility boundaries
+| Engineered foundation | Dynamically selected or generated |
+| --- | --- |
+| Identity, authorization, business tools and rules | Relevant capabilities and specialists |
+| Shared shell, navigation, input, history, activity | Work plan, dependencies, clarification requests |
+| Accessible reusable component catalog | Layout, bindings, controls, alternative views |
+| Validation, persistence, operation policies | Drafts, proposed changes, contextual follow-ups |
 
-```text
-Browser: fixed shell, generated workspace, activity, input
-  ↕ CopilotKit / AG-UI
-Agent runtime: orchestration, specialists, validation, persistence
-  ↕ MCP                                   ↓ verified findings
-Company MCP server                        UI composer
-  ↓ read-only                               ↓ A2UI messages
-company.sqlite                            Browser renderer
+Agents cannot invent unavailable capabilities. New business capabilities still require tools, schemas, and domain rules. The goal is to avoid a bespoke screen and orchestration branch for every task.
 
-Runtime persistence → runtime.sqlite
-  checkpoints, evidence, traces, saved A2UI surfaces
-```
+**Core success test:** add a capability through an MCP tool, metadata, specialist instructions, and permission policy. An unfamiliar user can use it through the existing shell without a task-specific frontend route or hardcoded planner branch. A new reusable component is acceptable when an interaction is genuinely new; record that separately from business-specific UI work.
 
-There are six responsibilities: orchestrator, four domain specialists, and UI composer. Start with one configurable model shared across them, separate instructions, and enforced tool allowlists. They do not require six services.
+## 2. Current implementation and gaps
 
-| Component | Owns | Must not do |
+| Area | Observed state | Required evolution |
 | --- | --- | --- |
-| Orchestrator | Objective, task dependencies, follow-ups, synthesis | Query company data directly |
-| Domain specialist | Investigation within an assigned domain | Generate layouts or use another domain's tools |
-| MCP server | Validated domain queries and deterministic calculations | Accept arbitrary SQL or company writes |
-| Runtime | Evidence ledger, finding validation, state merges, budgets | Depend on model memory for correctness |
-| UI composer | Selection and arrangement of verified information | Query company systems or invent values |
-| Frontend | Rendering, selection, history, semantic input events | Fetch company data directly |
+| Shell | Single Next.js page, input, activity, workspace, history | Preserve shared shell; add scoped sessions, user context, drafts |
+| Planning | `graph.ts` uses keyword classification and predefined investigation questions | Capability-grounded model planning with deterministic validation |
+| Specialists | Four fixed domains, MCP allowlists, live/fixture implementations | Configurable registry, actual tool schemas, bounded delegation |
+| Results | Evidence and findings | Records, comparisons, drafts, requested inputs, action proposals and receipts |
+| Composition | `composer.ts` emits a fixed metrics/findings/table/actions layout | Composition based on task and typed artifacts |
+| Renderer | Local A2UI subset adapter | Verified protocol behavior and reusable interactive controls |
+| Transport | Backend supports SSE; page awaits completed JSON | Consume lifecycle/state streams with reliable active-run identity |
+| Persistence | Runtime SQLite, evidence, findings, runs, surfaces, checkpoints | Ownership, scopes, artifact/draft versions, durable action ledger |
+| Identity | Page starts with `local-demo`; no authenticated principal in shown flow | Server-resolved identity and isolated sessions |
+| Operations | Company data is read-only | Explicit prepare/commit lifecycle for selected write capabilities |
+| Evaluation | Reported fixture 27/27; live 9/9 with fallback; earlier live-only 3/9 | Separate live ability, fallback recovery, permissions, interaction quality |
 
-Business data is immutable during a demo. The seed command creates it; the MCP process opens it read-only. Runtime state has a separate writable database. Frontend access to saved runtime evidence through the agent service is allowed; this does not bypass MCP to query company systems.
+Keep the evidence ledger, deterministic calculations, MCP boundary, Zod schemas, persistent graph, action validation, and history. Extend incrementally rather than replacing the application wholesale.
 
-## 3. Repository and developer workflow
+The old plan marked model-selected planning complete despite current keyword routing. Treat new exit gates as requirements to demonstrate, not checkboxes inherited from that plan.
+
+## 3. Target architecture and invariants
 
 ```text
-apps/
-  web/                  Next.js shell and CopilotKit endpoint
-  agent/                LangGraph runtime, CLI, transport adapter
-  company-mcp/          MCP server and domain tool registration
-packages/
-  contracts/            Zod schemas and inferred TypeScript types
-  database/             Company schema, migrations, deterministic seeds
-  runtime-storage/      Evidence, checkpoints, surfaces, activity records
-  config/               Environment parsing and shared settings
-tests/
-  integration/          Real MCP and runtime tests
-  e2e/                  Browser flows
-  evals/                Live model scenarios and scoring
-  fixtures/             Recorded responses and private expected outcomes
-docs/
-  architecture.md
-  implementation-plan.md
-  compatibility.md
-  demo-scenario.md
-  evaluation-results.md
+Shared shell + trusted reusable component renderer
+                    ↕ streamed events and user interactions
+Session / identity / authorization boundary
+                    ↓
+Context resolver → capability discovery → planner → plan validator
+                                                  ↓
+                                    bounded specialist scheduler
+                                                  ↕
+                                    authorized MCP gateway
+                                                  ↕
+                                         business systems
+                                                  ↓
+                         validated artifacts, evidence, action proposals
+                                                  ↓
+                              UI composer → surface validator → shell
+
+Scoped runtime storage: sessions, plans, tasks, artifacts, drafts,
+evidence, surfaces, events, execution receipts, budgets, audit records
 ```
 
-Keep database imports out of web and specialist code using package exports and lint restrictions. Specialists depend on the MCP client, contracts, and model adapter. Test-only expected outcomes must never be included in agent prompts, tool responses, or shipped application bundles.
+- Effective tool access is the intersection of user grants, specialist scope, and task constraints. Enforce it in code, not just prompts.
+- Apply authorization to evidence lookup, history, caches, streams, checkpoint access, and tool calls. Hiding UI elements is insufficient.
+- The composer receives authorized artifacts and registered actions. It cannot call business systems or execute generated code.
+- Keep A2UI as the presentation protocol. Task/artifact contracts describe business data, not a competing UI protocol. Verify installed-package support during implementation rather than assuming newer SDK features.
+- Shared state means agents collaborating inside an authorized task. It does not mean every employee shares all sessions. Start with private sessions; explicit sharing comes later.
+- Keep observed data, deterministic derivations, model-authored drafts, and confirmed execution results distinguishable.
 
-Planned root commands:
+## 4. Contracts and state to introduce
 
-| Command | Purpose |
+These are proposed names, not existing APIs. Put shared schemas in `packages/contracts`, version persisted data, and supply migration adapters.
+
+| Contract | Required information |
 | --- | --- |
-| `pnpm dev` | Start web and agent; agent starts its local MCP child process |
-| `pnpm db:seed --scenario sync-regression` | Create deterministic company data |
-| `pnpm investigate -- "What should I care about this morning?"` | Run an investigation from CLI |
-| `pnpm typecheck` / `pnpm lint` | Static checks |
-| `pnpm test` | Deterministic unit and integration checks |
-| `pnpm test:e2e` | Browser verification with fixture model responses |
-| `pnpm eval:live` | Explicit, paid model evaluation |
-| `pnpm replay --run <id>` | View saved results without new model calls |
+| Principal context | Organization/user IDs, grants, team/record scope, locale, timezone, policy version; server resolved |
+| User preferences | Role description, priorities, presentation preferences; cannot grant access |
+| Workspace session | Owner, organization, objective, active entities/time period, artifact/surface references, sharing policy |
+| Capability definition | Stable ID/version, MCP tool/server, description, real input/output schemas, read/write class, required grants, limits |
+| Specialist definition | ID, responsibilities, instructions version, capability scope, output schemas, budget |
+| Work plan/task | Objective, success criteria, dependencies, capabilities, input/output references, budgets, clarification requirements |
+| Workspace artifact | Versioned record set, metrics, comparison, finding, draft, proposal, or receipt; lineage and access scope |
+| Interaction event | Session/run/surface revision, registered action reference, selected records/form values, request ID |
+| Action proposal | Capability/version, exact targets/arguments, expected record versions, effect preview, expiry, policy requirements |
+| Execution receipt | Durable operation ID, actor, operation, attempt/status, external receipt, before/after references, timestamps/errors |
 
-Environment settings: provider API key, model ID, company DB path, runtime DB path, demo clock, and budget limits. Keep secrets server-side. Document configuration in `.env.example` without real credentials. Select the provider before implementing live specialists; keep its integration behind a small adapter supporting tool calls, structured results, cancellation, and usage reporting.
+Do not turn every record into a narrative finding. Preserve structured data, provenance, units, freshness, pagination/completeness, and explicit limitations. Keep large evidence payloads outside repeated model/checkpoint context.
 
-## 4. Core contracts
+## 5. Phased implementation backlog
 
-Implement Zod schemas first and derive TypeScript types. Version persisted contracts. Reject malformed structures at tool, agent, action, and UI boundaries.
+### P0 — Truthful baseline and responsive shell
 
-### Evidence
+Dependencies: none. Estimate: 2–4 focused engineering days.
 
-Each successful tool call returns an immutable evidence envelope containing:
+- [x] Run current tests/typechecks and record a reproducible baseline. Preserve existing behavior as a regression suite.
+- [x] Separate fixture, live-strict, and explicitly enabled live-with-fallback modes in execution traces and evaluation reports. Strict mode never substitutes fixture answers.
+- [x] Connect the page to one supported streaming transport. Decide whether CopilotKit is the actual browser bridge or AG-UI is consumed directly, then align documentation with the implementation.
+- [x] Publish active run identity before long-running work; reconcile events by run/revision and show progress before completion.
+- [x] Fix first-run cancellation, late-result suppression, reconnect, and refresh behavior. A cancelled/older run cannot replace a newer workspace.
+- [x] Replace builder-facing shell language with business language; move protocol/debug details to a developer view.
+- [x] Implement a real fixture-backed browser smoke flow. The root `test:e2e` currently references a web script absent from the web package.
 
-- `evidenceId`, `tool`, `toolVersion`, and `source`.
-- Normalized arguments and the applied filters.
-- Observation window, aggregation grain, timezone, and data-as-of time.
-- Retrieval time, seed/dataset version, units, and currency where applicable.
-- Structured result, including pagination and completeness information.
-- A payload hash for integrity checks.
+Primary files: `apps/web/app/page.tsx`, `apps/agent/src/index.ts`, `runtime.ts`, `specialists/index.ts`, eval code, package scripts.
 
-The runtime records which run/task/tool call produced the evidence before making it available to the model. Failed calls produce typed errors, not fabricated evidence. Deduplicate identical reads within the same immutable dataset/window when useful, while retaining tool-call trace records.
+**Exit gate:** browser displays progress during execution, cancel works on the first run, refresh restores accepted state, and live reporting cannot conceal fixture substitution.
 
-### Findings and claims
+### P1 — Identity, user context, permissions, session ownership
 
-Extend the specification's `AgentFinding` with:
+Dependencies: P0. Estimate: 4–7 days.
 
-- Authoring task and agent IDs.
-- `kind`: observation, hypothesis, or unresolved question.
-- Structured claims referencing evidence IDs and specific result fields or rows.
-- Time window and entities being described.
-- Severity, limitations, and optional contradictory evidence references.
-- Metrics with explicit units, comparison windows, and aggregation semantics.
+- [x] Seed operations, finance, support, and COO personas with an explicit grant matrix: capabilities, records, sensitive fields, operations.
+- [x] Add server-side principal resolution. A local-only persona switcher can simulate seeded users, but must be labeled and disabled outside demo mode.
+- [x] Separate relevance preferences from grants; permit cross-domain requests when authorized.
+- [x] Scope sessions, evidence, artifacts, surfaces, events, caches, and checkpoint namespaces by organization and owner/access policy. Stop relying on one default thread.
+- [x] Enforce access at API endpoints and the MCP boundary. Pass trusted principal context separately from model-controlled tool arguments. Filter rows/fields before data reaches agents.
+- [x] Check direct-ID access, restored history, and streaming reconnects. Clear private browser state when switching demo identities.
+- [x] Migrate existing local-demo data to an explicit demo owner rather than exposing it to all users.
+- [x] Integrate real authenticated sessions before multiple real users access deployed data. The identity provider is any OpenID Connect issuer (`OIDC_ISSUER`, client id, client secret, and `OIDC_SUBJECT_MAP`). `AUTH_MODE=oidc` ignores the demo principal header. The labeled switcher remains only for `AUTH_MODE=demo`.
 
-Evidence existence is necessary but does not prove that a claim follows from it. Validate numeric claims against referenced fields or allowlisted deterministic derivations. Narrative causal claims remain hypotheses unless additional evidence supports them. Never convert an agent's subjective confidence into a measured probability.
+Primary areas: new identity/policy modules, contracts, runtime API/storage/schema, MCP client/server.
 
-ARR represented by affected accounts is a precise metric. Revenue loss or renewal risk is a different claim and must not be inferred from ARR alone.
+**Exit gate:** two users independently use the same shell without session leakage; unauthorized records, fields, evidence, and surfaces stay inaccessible through both UI and direct APIs. The same broad prompt uses each user's relevant context.
 
-### Tasks and results
+### P2 — Capability and specialist registries
 
-`InvestigationTask` contains ID, domain, question, entity scope, time window, dependencies, status, and attempt count. A plan must be acyclic and use known domains. Results have completed/partial/failed status, validated findings, unresolved questions, and suggested follow-ups.
+Dependencies: P1. Estimate: 3–5 days.
 
-The orchestrator proposes tasks; runtime code validates and schedules them. Tool permissions are enforced by code, not only by prompts.
+- [x] Discover actual MCP tool schemas and enrich them with trusted domain, grant, and side-effect metadata. Discovery does not authorize execution.
+- [x] Supply models with real tool parameter schemas; replace the current generic object parameters in the live specialist loop.
+- [x] Register the existing four specialists as configuration and instructions while retaining enforced scopes.
+- [x] Select a bounded relevant capability subset for each request, rather than sending every tool to every specialist.
+- [x] Validate registry entries against connected tools and versions; expose missing capabilities honestly.
+- [x] Add one non-investigation read capability, preferably invoice aging/comparison using existing invoice data after a coverage audit.
 
-### Shared state
+**Exit gate:** the new capability works from its schema/metadata without a frontend route. Inaccessible tools are neither exposed to the model nor callable. Registry validation is tested independently.
 
-Store objective, thread/investigation/run IDs, resolved demo time, task map, finding map, evidence references, selected entities, active surface reference, navigation history, budgets, and current status in graph state.
+### P3 — General planning and shared artifacts
 
-Keep full evidence payloads and event history in runtime storage; do not repeatedly copy them into every checkpoint or model context. Build a bounded context for each task from relevant findings and evidence.
+Dependencies: P2. Estimate: 5–8 days.
 
-Use stable-ID map reducers for concurrent results. A specialist contributes its result; it cannot replace another specialist's state. The orchestrator alone changes investigation status. Contradictory findings remain visible until resolved or marked unresolved.
+- [x] Generalize investigation task/results to work tasks and typed artifacts, retaining compatibility with current fixtures and stored runs.
+- [x] Replace keyword routing with structured plans using the user objective, authorized capabilities, and session context. Fixture mode scores the capability catalog and may schedule one finance follow-up after affected accounts are known. Live mode sends authorized schemas, user context, and the objective to the model, including that follow-up; the runtime validates, grants-filters, drops writes, caps tasks at three, and executes the result. Live-strict does not substitute the fixture planner. Live-fallback records the substitution.
+- [x] Validate known capabilities, permissions, input types, acyclic dependencies, artifact references, and total task/tool/time/token budgets before scheduling.
+- [x] Begin with at most three concurrent specialist tasks and bounded replanning. Runtime code owns scheduling; model text cannot create unlimited work.
+- [x] Carry selected entities, explicit periods, relevant prior artifacts, and user edits into follow-ups. Resolve “these accounts” from state.
+- [x] Ask targeted clarification when required inputs or consequential ambiguities cannot be resolved. Return a clear limitation for unsupported tasks.
+- [x] Preserve partial outputs, conflicting evidence, missing data, and unmet success criteria. Show concise plans/progress, not private reasoning.
+- [x] Keep deterministic plans in labeled fixture mode only; do not silently replace live planning.
 
-### Semantic actions
+Primary files: `graph.ts`, `runtime.ts`, specialist loop, new planner/registry modules, contracts/storage.
 
-An action envelope contains action name, action ID, thread/investigation ID, surface ID/revision, and entity references. Initial names: investigate, show_affected_accounts, inspect_release, inspect_account, inspect_financial_impact, show_evidence, and retry_task.
+**Exit gate:** finance, support, and operations requests generate different valid plans; one cross-domain request coordinates specialists; an unsupported request stops honestly. Paraphrases do not require new routing branches, and follow-ups preserve scope.
 
-These are business intents carried using the chosen A2UI action mechanism, not a replacement UI schema. Validate names and entity references server-side. Deduplicate action IDs. Reject or explicitly rebase actions from stale surfaces. Evidence inspection can use saved runtime data without another model call.
+### P4 — Dynamic interactive UI
 
-## 5. Synthetic data and tool semantics
+Dependencies: P3; generic component preparation may begin after P2 contracts settle. Estimate: 5–8 days.
 
-Use a fixed scenario clock: `2026-09-20T08:00:00Z`. Resolve “this morning,” “yesterday,” and baseline periods against that clock, not the developer's actual date. Display the scenario time and timezone clearly.
+- [x] Replace fixed composition with a constrained composition step using the objective, authorized artifacts, interaction needs, and supported catalog.
+- [x] Build reusable record tables, detail views, comparisons, metric groups, time-series views, forms, selection/filter controls, draft previews, and action review controls as acceptance tasks require them.
+- [x] Verify A2UI adapter behavior for nested data updates, surface lifecycle, event bindings, and form state. Prefer supported renderer behavior and document catalog extensions.
+- [x] Validate components, data paths, references, action bindings, size/depth, and cycles before rendering. Never execute generated HTML/JavaScript.
+- [x] Use stable component/artifact IDs. Preserve selection, focus, scroll, and unsaved edits across updates; distinguish user input from regenerated defaults.
+- [x] Provide readable source inspection with filters, timestamps, units, and limitations; keep raw JSON secondary.
+- [x] Support “show this as a table” without losing context or unnecessarily querying tools again.
+- [x] Retain the last valid surface on failure. A disclosed generic artifact view is an acceptable recovery path, measured separately from successful composition.
 
-Seed approximately the original requested volumes: 100 customers/subscriptions, 30 days of metrics, 10 releases, 200 support tickets, 500 invoices, several thousand usage records, and five historical incidents. Add enough higher-resolution records around the regression to support the timeline.
+Primary files: `composer.ts`, `a2ui-validate.ts`, `apps/web/lib/a2ui.tsx`, A2UI/artifact contracts, styles.
 
-| Data | Required fields or additions |
-| --- | --- |
-| Customers | Stable ID, segment, timezone |
-| Configuration history | Customer, feature/config value, effective start/end |
-| Subscriptions | Customer, status, term, ARR in integer minor units, currency |
-| Service metrics | Time bucket, service, customer/cohort, requests, errors, signature |
-| Feature usage | Time bucket, customer, feature, usage count |
-| Releases and rollouts | Components, version, deployment time, cohort, rollout timing |
-| Support tickets | Customer, creation time, category, status, text |
-| Incidents, invoices, notes | Domain history with foreign keys and timestamps |
+**Exit gate:** comparison, queue/detail, and draft/form tasks produce appropriate interactive surfaces without business-specific routes. Users can select, edit, submit, revisit, and change presentation. Keyboard and narrow-screen flows work; invented data and unregistered actions fail validation.
 
-Store counts so aggregate error rates are `sum(errors) / sum(requests)`, not averages of percentages. Define zero denominators and missing buckets explicitly. Compare periods with equal duration and comparable cohort membership. Use one demo currency initially. Sum ARR once per affected account.
+### P5 — Business actions through generated workflows
 
-Target the illustrative 14 accounts and $2.1M ARR if convenient; ensure all displayed totals are computed from seeded rows. Choose counts that produce the target trends within documented rounding tolerances. Never hardcode totals in prompts or UI.
+Dependencies: P1–P4. Estimate: 5–8 days.
 
-No row should announce the root cause. Include unaffected customers with the same feature, unrelated support noise, and other recent releases so comparison is meaningful.
+First write: assign a synthetic support ticket to an eligible owner. This proves a real state change in an existing domain without adding external messaging or payment execution.
 
-Initial tool slice:
+- [x] Add read/prepare/commit capability semantics. Reads remain automatic; confirmations follow operation policy and the user's existing authorization.
+- [x] Prepare exact targets, changes, expected record versions, expiry, and effect preview on the server.
+- [x] Generate an editable assignment form whose eligible owners come from a tool. Editing consequential fields invalidates or regenerates the bound proposal.
+- [x] Recheck permissions, constraints, freshness, and any required confirmation immediately before commit. Bind confirmation to the exact proposal revision/parameters.
+- [x] Persist action/idempotency state before issuing the write. Use stable operation keys with supporting tools; record pending, succeeded, failed, and unknown outcomes.
+- [x] Reconcile uncertain outcomes before retrying. Do not promise exactly-once execution where the external system cannot provide it.
+- [x] Display a receipt and refresh affected artifacts after success. Cancellation after commit does not imply rollback; reversal exists only where the underlying capability supports it.
+- [x] Keep the read-only investigation fixture; add an independently resettable mutable scenario for operation tests.
 
-| Domain | Tools needed for first complete story |
-| --- | --- |
-| Reliability | `get_service_health`, `get_error_metrics`, `get_recent_releases`, `get_release_details` |
-| Product | `get_feature_usage`, `compare_usage_periods`, `get_customer_feature_usage` |
-| Customer | `search_customers`, `get_customer`, `search_support_tickets`, `get_customer_support_history` |
-| Finance | `calculate_account_exposure`, `get_subscription` |
+Primary areas: action contracts, runtime action handling/storage, MCP tools, database migrations, form bindings.
 
-Existing tools need explicit filters for customer IDs, cohort/configuration, feature, service, and time window as applicable. Include configuration history in customer detail and rollout details in release detail. If these cannot answer a concrete investigation question, add a narrowly defined tool, not generic SQL.
+**Exit gate:** an authorized user completes assignment through generated UI. Unauthorized, stale, expired, tampered, and duplicate submissions cannot cause unintended writes. Restart/retry reconciles operation state; failures and uncertainty are visible.
 
-Return totals and pagination metadata from searches. Ticket complainants are not automatically the full affected population: derive technical impact from telemetry, then enrich with support data. Finance accepts the validated affected-customer set and reports its definition with the result.
+### P6 — Prove generality and usability
 
-## 6. Implementation milestones
+Dependencies: P0–P5. Estimate: 4–7 days plus participant scheduling.
 
-### M0 — Protocol and persistence spike
+- [x] Freeze held-out paraphrases and data variations before prompt tuning; run the acceptance matrix below.
+- [x] Add one new business capability through registry/tool/policy changes. Record all code changes; investigate any bespoke page or routing branch needed.
+- [x] Report live-strict quality separately from fixture regressions and fallback-assisted completion, including composer fallback.
+- [x] Verify browser flows for streaming, identity isolation, forms, history, cancellation, stale state, and keyboard use.
+- [ ] Ask at least four unfamiliar participants representing the four personas to complete read, follow-up, and action tasks. Record completion, wrong turns, source comprehension, and disruptive layout changes.
+- [x] Update architecture, setup, demo scenarios, and evaluation documentation with observed results and unmet gates.
 
-Dependencies: none. Estimated effort: 1–2 focused engineering days.
+**Exit gate:** workflows meet the quality thresholds below, and business capability growth does not require corresponding bespoke screens. Passing only the morning investigation is insufficient.
 
-- [ ] Create pnpm workspace, TypeScript config, minimal app processes, and environment validation.
-- [ ] Verify exact supported versions of CopilotKit, AG-UI adapter, A2UI specification/catalog, LangGraph, MCP SDK, Zod, and Node.
-- [ ] Record imports, versions, transport choices, and working example references in `docs/compatibility.md`.
-- [ ] Implement one MCP tool reading one seeded SQLite fact.
-- [ ] Connect one minimal graph task to that tool through the actual MCP transport.
-- [ ] Send the result through AG-UI and render a standard A2UI surface inside the dedicated workspace area.
-- [ ] Click a generated action and receive its semantic context in the agent runtime.
-- [ ] Update the same surface and confirm the renderer does not require appending a new chat message.
-- [ ] Verify a persistent LangGraph checkpointer against the chosen TypeScript package versions and restart once.
-- [ ] Write `docs/architecture.md` with the validated boundaries.
+### P7 — Real organization pilot
 
-Completion gate: real browser → runtime → MCP → SQLite → generated UI → action round trip works; process restart restores the checkpoint. One disposable fixture surface is acceptable here. Do not build the full company dataset before this gate.
+Dependencies: P6 and real authentication from P1. Estimate after selecting systems/deployment.
 
-Risk response: if the standard renderer needs a thin workspace mounting adapter, document it and reuse its actual A2UI renderer. Do not silently substitute a homegrown renderer or downgrade to text-only chat. Simplify unsupported visuals to standard components first.
+- [x] Connect one read-only system through `EXTERNAL_READ_URL` with a server-held bearer token. Callers need `EXTERNAL_READ_PRINCIPALS`. Unconfigured stays unavailable. The token is not returned to the browser. No customer system is bundled.
+- [x] Add deployment session security, tenant isolation, restricted origins, input/rate limits, secret management, retention, audit access, backups, and tested recovery. OpenID mode refuses to start without session secret, issuer, client credentials, subject map, origin allowlist, and audit token. `pnpm backup` snapshots the runtime and company databases.
+- [x] Recheck grants on historical artifacts after revocation; propagate retention/deletion to evidence, derived surfaces, and checkpoints.
+- [x] Establish pricing, budgets, connector health, latency, and error monitoring. Unconfigured cost is `unknown`, not zero. A USD budget is refused while the price is unknown. Token budget stops a live specialist loop.
+- [x] External notes can be written only when `EXTERNAL_WRITE_ENABLED=true`, the host is allowlisted, and the principal is listed. The synthetic ticket assignment remains the company write. Duplicate keys do not send a second successful call. Unknown outcomes are not retried.
+- [x] One external connector is the expansion point. Further connectors wait on a real task. Employee-to-employee shared sessions and autonomous background work stay deferred.
 
-### M1 — Data, contracts, and evidence ledger
+**Exit gate:** a small pilot group uses one workspace on real data with dependable access boundaries, observable failures, and recoverable operations.
 
-Dependencies: M0. Estimated effort: 2–3 days.
+## 6. Acceptance matrix
 
-- [ ] Implement schemas and seed generation described above.
-- [ ] Add canonical entity references, task/results, findings, evidence, and action contracts.
-- [ ] Add runtime tables for immutable evidence, runs, tasks, activity, and saved surfaces.
-- [ ] Implement the fixed clock, deterministic seed, and dataset versioning.
-- [ ] Seed regression, quiet-day, and unrelated-anomaly variants.
-- [ ] Write an independent expected-outcome fixture from raw rows.
-- [ ] Add tests for foreign keys, temporal ordering, impacted cohort, ARR, weighted rates, and comparison windows.
+These are target scenarios. Audit existing data/tool coverage and implement missing capabilities during P2–P5.
 
-Completion gate: repeated seeding gives identical business rows, all headline metrics are reproducible, and no runtime-accessible record contains the complete explanation.
+| User/request | Work required | Useful generated interface |
+| --- | --- | --- |
+| Operations: service health and recent changes this week | Telemetry/releases with explicit period | Trend, timeline, scoped details |
+| Finance: compare overdue invoices by customer | Invoices and deterministic aging | Sortable table, totals, customer details |
+| Support: unassigned escalations; assign one | Queue query, prepare/commit assignment | Queue, detail, assignment form, receipt |
+| COO: customer problems requiring coordination | Authorized support/operations/finance synthesis | Prioritized cross-domain summary and sources |
+| Any permitted user: “Only these accounts, last month, as a table” | Resolve prior selection; change period/view | Updated view retaining context |
+| Any user: draft customer onboarding checklist | Retrieve context; propose steps | Editable draft, explicit assumptions |
+| Restricted user: inaccessible financial information | Enforce access before model exposure | Clear limitation; permitted alternatives |
+| Any user: unavailable business operation | Detect missing capability | Honest limitation, no fabricated success |
 
-### M2 — Company capabilities over MCP
+Run “What needs my attention?” across personas as a relevance test, not the only shared-interface test. Ask the same explicit question from two authorized roles: underlying facts should agree even if emphasis differs.
 
-Dependencies: M1. Estimated effort: 1–2 days.
+## 7. Evaluation and release gates
 
-- [ ] Implement the initial domain tools and register validated input/output schemas.
-- [ ] Use a local stdio MCP connection managed by the agent process; keep one server initially.
-- [ ] Return evidence envelopes, typed empty results, pagination, and bounded errors.
-- [ ] Wrap client calls with runtime tracing and evidence persistence.
-- [ ] Enforce specialist tool allowlists and read-only SQLite access.
-- [ ] Integration-test actual MCP calls, invalid ranges/IDs, missing data, pagination, and cancellation/error propagation where supported.
+### Deterministic correctness
 
-Completion gate: all facts needed for the main story can be retrieved through domain tools. No specialist imports the database package, and company rows remain unchanged after a run.
+All critical authorization, tenant/session isolation, numeric lineage, idempotency, stale-version, and tampering tests must pass. Unauthorized data must not reach model context, stream payloads, caches, restored surfaces, or evidence endpoints. Totals remain reproducible from independent fixture queries. Drafts cannot masquerade as observed facts or completed operations.
 
-### M3 — Specialist agents in isolation
+Validate malformed/cyclic UI graphs and unsupported actions. Test meaningful browser behavior rather than exact generated prose/layout snapshots.
 
-Dependencies: M2 and configured model provider. Estimated effort: 2–3 days.
+### Live quality
 
-- [ ] Implement a reusable bounded tool-calling loop and provider adapter.
-- [ ] Add Reliability, Product, Customer, and Finance prompts and allowlists.
-- [ ] Validate final structured results; allow one repair attempt for malformed output.
-- [ ] Reject unknown evidence IDs, unknown entities, and unsupported numeric claims.
-- [ ] Pass only relevant task context; treat ticket and note text as untrusted data.
-- [ ] Support explicit partial results, missing-data reports, and cross-domain follow-up requests.
-- [ ] Add CLI tasks for each specialist and record usage/latency.
+Proposed P6 matrix: 4 personas × 3 task families (retrieve/compare, contextual follow-up, prepare/execute) × 3 paraphrases = 36 cases; repeat twice for 72 runs. Include allowed and denied requests with explicit expected outcomes. Add separate failure/adversarial cases for injection, unavailable tools, timeout, stale state, and interrupted commits.
 
-Completion gate: each specialist solves a bounded domain question using real tools and returns traceable findings. Injected instructions in a ticket cannot grant tools or change the system objective.
+Target at least 90% live-strict end-to-end success on supported held-out cases. Any unauthorized disclosure/write or fabricated successful execution blocks release regardless of average score. These are targets, not current measured results.
 
-### M4 — Orchestration and durable investigation
+Report planner validity, tool success, artifact correctness, useful UI completion, strict success, fallback frequency, denial correctness, clarifications, calls/tokens, and actual cost. Record provider/model/configuration and sample size. Correct denial counts only when expected by policy.
 
-Dependencies: M3. Estimated effort: 2–3 days.
+### Experience
 
-- [ ] Implement graph stages: resolve context → plan → validate/schedule → execute ready tasks → merge → assess gaps → compose → finish.
-- [ ] Let the model select relevant domains and dependencies; do not route by matching the demo query text.
-- [ ] Execute independent tasks concurrently, with at most three specialist tasks active initially.
-- [ ] Let early results schedule dependent finance work once an affected set is available.
-- [ ] Emit partial findings while other specialists are working.
-- [ ] Add follow-up task deduplication and evidence reuse scoped by dataset, entities, and time window.
-- [ ] Persist graph checkpoints under a stable thread ID and separate per-turn run IDs.
-- [ ] Record contradictory findings and allow a bounded clarification investigation.
-- [ ] Implement cancellation and prevent cancelled/superseded runs from publishing a current surface.
+Targets: first browser-visible progress within 2 seconds; first useful read result within 20 seconds where source latency permits; representative multi-domain read completion p95 under 60 seconds. Measure the browser experience, not only backend event timing. Preserve edits/selections; never silently lose drafts.
 
-Initial configurable limits: three investigation rounds, 12 specialist tasks per user turn, six tool calls per task, three concurrent specialists, one structured-output repair, and a 120-second run deadline. Also cap total model tokens and record actual usage. These are starting guardrails to tune from measurements.
+Distinguish saved-view replay, new-turn continuation, and interrupted execution recovery. Replay should not require a new model call. Report latency misses rather than masking them with deterministic answers.
 
-Completion gate: CLI handles the full main investigation and follow-up questions; at least two independent tasks overlap; a failed Finance task preserves operational findings; restart recovers completed state.
+## 8. Migration and implementation discipline
 
-### M5 — Verified A2UI composition
+1. Preserve the existing investigation as a regression scenario.
+2. Add versioned contracts and storage migrations before changing persisted payloads. Back up runtime data and test old-state loading.
+3. Adapt legacy findings into artifacts, then migrate planner and composer independently.
+4. Add ownership before expanding access or writes. Saved surfaces are not permanent authorization grants.
+5. Ship small end-to-end slices: scoped read, materially different generated view, then one complete action lifecycle.
+6. Keep deterministic business rules in tools/domain services. Prompts coordinate capabilities; they do not replace accounting rules, permissions, or invariants.
 
-Dependencies: M4 and M0 renderer proof. Estimated effort: 2–3 days.
+Avoid role-specific frontend routes, exhaustive task templates, unrestricted SQL, generated executable UI, a service per agent, and premature long-term-memory infrastructure. These do not solve the immediate product gaps.
 
-- [ ] Build a presentation input containing verified findings, approved metric values, entities, limitations, and allowed follow-up actions.
-- [ ] Give the composer no company tools or database access.
-- [ ] Generate native A2UI messages against the pinned specification and catalog.
-- [ ] Validate component references, surface IDs, data bindings, action payloads, and resource limits.
-- [ ] Bind displayed business values to approved presentation data where the renderer supports it; check any duplicated literals against that data.
-- [ ] Preserve claim-to-evidence links in presentation metadata without inventing a component protocol.
-- [ ] Keep stable surface/component IDs where practical; apply complete valid update batches.
-- [ ] Save accepted A2UI messages and presentation data with surface revisions.
-- [ ] On invalid output, allow one repair, then preserve the last valid surface with a concise failure status.
+## 9. Sequence, estimates, and first work package
 
-Start with the catalog's supported text, layout, list, button, and form primitives. Use tables/charts only if supported by the verified renderer. A chart extension is optional after the complete flow works.
+Recommended order: P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7. Generic component work may overlap after contracts stabilize. Identity and execution boundaries precede real multi-user writes.
 
-Completion gate: changing findings produces a corresponding workspace; every displayed headline number maps to evidence; invalid output does not blank the application; no `IncidentPage` or `CustomerPage` is needed.
+P0–P6 estimate: 28–47 focused engineering days for one experienced engineer, plus integration contingency and participant scheduling. These are estimates, not commitments. Validate a read-only general workspace after P4 before expanding operation scope. Estimate P7 separately once real integrations are selected.
 
-### M6 — Interactive workspace and live activity
+Start with P0:
 
-Dependencies: M5. Estimated effort: 2–3 days.
+1. Establish reproducible checks and explicit live-strict/fallback modes.
+2. Wire streaming progress and active-run identity into the shell.
+3. Verify first-run cancellation, refresh/reconnect, and late-result handling in a browser.
+4. Record one successful investigation and one visible partial/failure outcome.
 
-- [ ] Build the fixed header, workspace, activity panel, and input.
-- [ ] Show waiting, running, partial, completed, cancelled, and failed states.
-- [ ] Map AG-UI run/step/tool/state events to concise activity entries; never display private reasoning.
-- [ ] Forward generated actions through the agent runtime with selection and investigation context.
-- [ ] Add evidence inspection showing source, filters, time window, result, and limitations.
-- [ ] Keep a surface history and back action; restore old surfaces without model regeneration.
-- [ ] Persist current selection and restore it on refresh.
-- [ ] Use one active run per thread initially; provide cancel-and-replace for a new request.
-- [ ] On reconnect, fetch persisted state and surface revision. Event-level resume is optional; state recovery is mandatory.
-- [ ] Verify keyboard access, focus preservation, narrow layouts, and long content.
+Then deliver four local personas and isolated sessions in P1. The next product checkpoint is two users working independently in the same shell, followed by two substantially different tasks producing different interfaces through the common planner/composer.
 
-Completion gate: complete the four-step demo in the browser, inspect evidence, go back, refresh, and continue. Activity arrives before completion; partial UI updates do not steal keyboard focus.
+| Decision | Planning default | Revisit |
+| --- | --- | --- |
+| Initial users | Four synthetic personas, private sessions | P1 before real authentication |
+| First new read | Invoice aging/comparison using seeded invoices | P2 coverage audit |
+| First write | Synthetic support-ticket assignment | P5 coverage audit |
+| UI approach | Existing stack, A2UI, constrained reusable catalog | P4 integration verification |
+| Agent deployment | Configurable specialists in one runtime | Only if scale/isolation requires change |
+| Shared employee sessions | Deferred; explicit access design required | After P6 |
+| Identity provider | OpenID Connect, issuer selected by environment | A hosted issuer is still required before a real deployment |
+| External system | Read and optional note write, both disabled until URLs and secrets are set | When a real system is chosen |
 
-### M7 — Evaluation, failures, and handoff
-
-Dependencies: M6. Estimated effort: 2–3 days.
-
-- [ ] Add deterministic end-to-end fixtures and real-model evaluation runs.
-- [ ] Run the scenario and failure matrix below.
-- [ ] Measure time to first activity, first useful finding, completed workspace, token usage, and model cost when pricing is configured.
-- [ ] Remove any scenario-specific query routing or prompt hints found during review.
-- [ ] Document setup, reset, seed selection, CLI usage, replay, and known limitations.
-- [ ] Update this plan's checkboxes and write `docs/evaluation-results.md` with actual results.
-- [ ] Ask an unfamiliar person to investigate and verify a claim; record confusing transitions.
-
-Completion gate: all deterministic checks pass, live evaluation thresholds are met or explicitly reported as unmet, and the application starts from documented commands in a clean checkout.
-
-## 7. Testing and evaluation
-
-Use deterministic tests for calculations, permissions, state transitions, contracts, persistence, and rendering behavior. Use recorded/fixture model responses for CI; use real models to measure investigative quality. Mock-based success alone does not validate the central experiment.
-
-| Scenario | Expected behavior |
-| --- | --- |
-| Sync regression | Connect telemetry, usage, affected configuration/accounts, and represented ARR; label root cause as a hypothesis unless supported |
-| Quiet day | Report no major supported anomaly; do not invent an incident |
-| Unrelated anomaly | Follow its evidence rather than always blaming synchronization |
-| Paraphrased opening query | Investigate without exact-string routing |
-| Narrow finance question | Use Finance directly without unnecessarily launching all specialists |
-| Finance timeout | Show verified operational impact and financial information unavailable |
-| Conflicting time windows | Normalize or explain the disagreement; do not silently merge |
-| Unknown customer | Show a grounded empty result and preserve current context |
-| Malformed A2UI | Repair once or retain last valid surface |
-| Duplicate or stale click | Avoid duplicate tasks and reject/rebase stale context |
-| Refresh/restart | Restore persisted investigation and accepted surface |
-| Cancelled run finishes late | Ignore late publications to current state |
-| Prompt injection in ticket | Treat it as data and preserve tool restrictions |
-
-Proposed acceptance thresholds, to validate rather than claim in advance:
-
-- All displayed headline numeric claims resolve to valid evidence and deterministic calculations.
-- Exact affected-account membership and ARR match the independent fixture for the regression scenario.
-- At least two specialist tasks overlap in the broad investigation.
-- Three paraphrases across three datasets, repeated three times: 27 live opening-query runs; at least 90% satisfy their scenario rubric.
-- No invented major incident in quiet-day runs. Any unsupported headline financial claim is a release blocker even if the overall score passes.
-- Five live full drill-down sessions complete without losing context.
-- No company-data mutation across the suite.
-- Proposed local latency targets: activity within two seconds, useful findings within 20 seconds, complete broad investigation within 60 seconds. Report median and p95 with model/provider details; adjust scope based on measurements, not hidden shortcuts.
-
-Do not snapshot exact generated prose or layout as the primary success metric. Score factual correctness, evidence quality, useful follow-ups, and valid interactions. Replay of a saved result should be deterministic; fresh model reasoning need not produce identical output.
-
-## 8. Operational details and recovery
-
-Log structured events with thread, investigation, run, task, agent, tool-call, and evidence IDs. Record durations, retries, token counts, and typed errors. Log high-level task plans, never private chain-of-thought. Keep API keys out of logs.
-
-Use three separate notions of recovery:
-
-1. View replay: load accepted A2UI and findings without model calls.
-2. Conversation continuation: run a new turn against persisted investigation context.
-3. Interrupted execution recovery: mark interrupted tasks and explicitly retry safe read-only work within a fresh budget.
-
-Do not promise exactly-once model execution. Use idempotent state writes, action deduplication, and immutable evidence to make retries understandable. Persist evidence before committing a finding that references it. Publish surfaces only after the referenced findings are saved.
-
-## 9. Effort, dependencies, and first work package
-
-Estimated total: 15–22 focused engineering days for one experienced engineer, plus contingency for renderer/provider integration and usability iteration. This is a planning estimate, not a delivery commitment. A convincing first complete path should appear before final hardening.
-
-Critical path: M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7. Once contracts are stable, dataset work and shell work can be developed independently, but neither should bypass the M0 integration gate.
-
-The first implementation work package is M0 only: scaffold, one SQLite-backed MCP tool, one graph task, one A2UI workspace surface, one generated action, and one restart test. Its deliverable is a runnable proof plus pinned compatibility notes. That resolves the highest-risk integration assumptions before committing to the full runtime.
-
-## 10. Technical references checked during planning
-
-- [CopilotKit A2UI integration](https://docs.copilotkit.ai/generative-ui/a2ui): documents A2UI support and current v2 entry points. Dedicated workspace mounting and surface lifecycle still require the M0 spike.
-- [AG-UI event concepts](https://docs.ag-ui.com/concepts/events): reference for lifecycle, tool, and state event handling.
-- [MCP TypeScript SDK v2](https://ts.sdk.modelcontextprotocol.io/v2/): reference for client/server packages and transport implementation.
-- [LangGraph JavaScript persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence): checkpointers retain thread state; in-memory persistence does not survive process restart. Verify the concrete persistent adapter against pinned packages in M0.
-
-These references establish integration direction, not a tested version matrix. Record exact installed versions and smoke-test evidence during implementation.
+The outcome is one coherent application whose capabilities grow through business tools and agent configuration, while the same clean interface adapts to different people and tasks.

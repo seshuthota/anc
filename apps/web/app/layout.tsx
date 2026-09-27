@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "DemoCo workspace",
-  description: "An investigation workspace assembled from agent findings.",
+  description: "A shared DemoCo workspace assembled from verified specialist findings.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

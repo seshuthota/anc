@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "dev": "pnpm --parallel --filter @anc/web --filter @anc/agent dev",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
@@ -15,7 +15,10 @@
     "investigate": "pnpm --filter @anc/agent investigate",
     "replay": "pnpm --filter @anc/agent replay",
     "test:e2e": "pnpm --filter @anc/web test:e2e",
-    "eval:live": "pnpm --filter @anc/agent eval:live"
+    "eval": "pnpm --filter @anc/agent eval",
+    "eval:live": "pnpm --filter @anc/agent eval:live",
+    "eval:live-fallback": "pnpm --filter @anc/agent eval:live-fallback",
+    "backup": "pnpm --filter @anc/agent backup"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

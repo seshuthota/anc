@@ -9,5 +9,10 @@ coverage/
 !.env.example
 data/*.sqlite
 data/*.sqlite-*
+data/backups/
 packages/database/data/
+apps/*/data/
 *.tsbuildinfo
+test-results/
+playwright-report/
+blob-report/

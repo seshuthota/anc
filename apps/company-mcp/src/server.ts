@@ -4,7 +4,8 @@ import { DEFAULT_COMPANY_DB_PATH, openCompanyDatabase } from '@anc/database';
 import { registerCompanyTools } from './tools.js';
 
 export function createCompanyMcpServer(dbPath = process.env.COMPANY_DB_PATH ?? DEFAULT_COMPANY_DB_PATH) {
-  const db = openCompanyDatabase(dbPath, true);
+  const writable = process.env.COMPANY_DB_WRITABLE !== "false";
+  const db = openCompanyDatabase(dbPath, !writable);
   const server = new McpServer({ name: 'anc-company', version: '1.0.0' }, { capabilities: { tools: {} } });
   registerCompanyTools(server, db);
   return { server, db };
