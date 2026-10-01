@@ -153,16 +153,21 @@ function render(
   };
   if (type === "Column" || type === "Row") {
     const className = type === "Row" ? "a2ui-row" : "a2ui-col";
-    return <div className={className} key={id}>{childrenOf(component).map((childId) => nested(childId, scope))}</div>;
+    const kids = childrenOf(component).map((childId) => nested(childId, scope)).filter((node) => node != null);
+    if (!kids.length) return null;
+    return <div className={className} key={id}>{kids}</div>;
   }
   if (type === "Card") {
     const child = String(component.child ?? childrenOf(component)[0] ?? "");
     return <article className="finding-card" key={id}>{nested(child, scope)}</article>;
   }
   if (type === "Text") {
+    const content = textOf(component.text, model, scope);
+    // Empty text is not evidence — skip so Column/Row gaps do not paint blank boxes.
+    if (!content.trim()) return null;
     const variant = String(component.variant ?? "");
     const Tag = variant === "h2" ? "h2" : variant === "h3" ? "strong" : variant === "caption" ? "small" : "p";
-    return <Tag key={id}>{textOf(component.text, model, scope)}</Tag>;
+    return <Tag key={id}>{content}</Tag>;
   }
   if (type === "Button") {
     const action = component.action as { event?: { name?: string | { path?: string }; context?: Record<string, unknown> } } | undefined;

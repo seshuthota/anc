@@ -21,6 +21,7 @@ export default function HomePage() {
   const [busy, setBusy] = useState(false);
   const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null);
   const [developerOpen, setDeveloperOpen] = useState(false);
+  const [devMode, setDevMode] = useState(false);
   const [principalId, setPrincipalId] = useState("user-coo");
   const [personas, setPersonas] = useState<PrincipalSummary[]>([]);
   const [authMode, setAuthMode] = useState<"demo" | "oidc">("demo");
@@ -62,7 +63,10 @@ export default function HomePage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("dev") === "1") setDeveloperOpen(true);
+    if (params.get("dev") === "1") {
+      setDevMode(true);
+      setDeveloperOpen(true);
+    }
     const stored = window.localStorage.getItem(PRINCIPAL_STORAGE_KEY) ?? "user-coo";
     setPrincipalId(stored);
     void (async () => {
@@ -218,6 +222,12 @@ export default function HomePage() {
 
   const substitutions = state.execution?.substitutions ?? [];
   const currentPersona = personas.find((item) => item.id === principalId);
+  // Activity aside is earned by real updates, restorable history, or ?dev=1 details.
+  // Cancel/progress stay in the topbar + in-run banner — do not force an empty column.
+  const showActivityPanel =
+    state.activity.length > 0
+    || state.surfaceHistory.length > 0
+    || devMode;
 
   async function switchPrincipal(nextId: string) {
     window.localStorage.setItem(PRINCIPAL_STORAGE_KEY, nextId);
@@ -239,7 +249,6 @@ export default function HomePage() {
           <span className={`status-dot ${busy || state.status === "running" ? "running" : state.status === "failed" ? "failed" : ""}`} aria-hidden="true" />
           <span aria-live="polite">{statusLabel}</span>
           <span className="divider" />
-          <span>Sep 20, 2026 · 08:00 UTC</span>
           {authMode === "oidc" ? (
             signedOut
               ? <a className="ghost" href="/api/auth/login">Sign in</a>
@@ -258,13 +267,12 @@ export default function HomePage() {
           {busy ? <button className="ghost" type="button" onClick={() => void cancel()}>Cancel</button> : null}
         </div>
       </header>
-      <div className="workspace-grid">
+      <div className={`workspace-grid${showActivityPanel ? " with-activity" : ""}`}>
         <section className="workspace" aria-live="polite" aria-busy={busy}>
           <div className="workspace-heading">
             <div>
               <span className="eyebrow">{state.surface ? "CURRENT VIEW" : "WORKSPACE"}</span>
               <h2>{state.surface?.title ?? "Ask what needs attention"}</h2>
-              <p>Ask in your own words. This workspace stays the same; the contents change with the question.</p>
             </div>
             <span className="badge">{currentPersona?.title ?? "Demo user"}</span>
           </div>
@@ -279,48 +287,57 @@ export default function HomePage() {
               messages={state.surface.messages as A2UIMessage[]}
               onAction={(action) => void invoke(action.name, action.context)}
             />
-          ) : <p className="muted">No saved view yet. Try: What should I care about this morning?</p>}
+          ) : null}
           {signedOut ? null : <form className="question-form" onSubmit={submit} id="question">
             <span className="spark" aria-hidden="true">✦</span>
             <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask anything about the company…" aria-label="Workspace question" />
             <button type="submit" disabled={busy}>{busy ? "Working…" : "Ask"}</button>
           </form>}
         </section>
-        <aside className="activity-panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">PROGRESS</span><h2>Activity</h2></div>
-            <span className="live-pill"><span className={`status-dot ${busy || state.status === "running" ? "running" : ""}`} /> {statusLabel}</span>
-          </div>
-          <div className="timeline">
-            {(state.activity.length ? state.activity : [{ id: "seed", message: "Ask a question to get started", kind: "status", timestamp: new Date().toISOString() }]).map((item) => (
-              <div className="timeline-item" key={item.id}>
-                <span className="timeline-dot" />
-                <div><p>{item.message}</p><small>{activityKindLabel(item.kind)}</small></div>
+        {showActivityPanel ? (
+          <aside className="activity-panel">
+            <div className="panel-heading">
+              <div><span className="eyebrow">PROGRESS</span><h2>Activity</h2></div>
+              <span className="live-pill"><span className={`status-dot ${busy || state.status === "running" ? "running" : ""}`} /> {statusLabel}</span>
+            </div>
+            {state.activity.length ? (
+              <div className="timeline">
+                {state.activity.map((item) => (
+                  <div className="timeline-item" key={item.id}>
+                    <span className="timeline-dot" />
+                    <div><p>{item.message}</p><small>{activityKindLabel(item.kind)}</small></div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="panel-footer">
-            <span className="eyebrow">PREVIOUS VIEWS</span>
-            {state.surfaceHistory.map((item) => (
-              <button key={`${item.surfaceId}-${item.revision}`} className="ghost history" type="button" onClick={() => void restore(item)}>
-                {item.title}
-              </button>
-            ))}
-            {!state.surfaceHistory.length ? <p className="muted">No previous views yet.</p> : null}
-            <details className="dev-details" open={developerOpen} onToggle={(event) => setDeveloperOpen(event.currentTarget.open)}>
-              <summary>Developer details</summary>
-              <p>Run {state.runId ?? "none"}</p>
-              <p>Investigation {state.investigationId ?? "none"}</p>
-              <p>Revision {state.surface?.revision ?? "—"}</p>
-              <p>Provider {state.execution?.provider ?? "unknown"} · {state.execution?.executionMode ?? "fixture"}</p>
-              <p>Cost {state.usage?.costStatus === "known" && state.usage.estimatedCostUsd !== null ? `$${state.usage.estimatedCostUsd}` : "unknown"}</p>
-              <p>Transport agent SSE (`/runtime/investigate`)</p>
-              {substitutions.length ? substitutions.map((item) => (
-                <p key={`${item.specialist}-${item.reason}`}>Substituted {item.specialist}: {item.reason}</p>
-              )) : <p>No specialist substitutions</p>}
-            </details>
-          </div>
-        </aside>
+            ) : null}
+            <div className="panel-footer">
+              {state.surfaceHistory.length ? (
+                <>
+                  <span className="eyebrow">PREVIOUS VIEWS</span>
+                  {state.surfaceHistory.map((item) => (
+                    <button key={`${item.surfaceId}-${item.revision}`} className="ghost history" type="button" onClick={() => void restore(item)}>
+                      {item.title}
+                    </button>
+                  ))}
+                </>
+              ) : null}
+              {devMode ? (
+                <details className="dev-details" open={developerOpen} onToggle={(event) => setDeveloperOpen(event.currentTarget.open)}>
+                  <summary>Developer details</summary>
+                  <p>Run {state.runId ?? "none"}</p>
+                  <p>Investigation {state.investigationId ?? "none"}</p>
+                  <p>Revision {state.surface?.revision ?? "—"}</p>
+                  <p>Provider {state.execution?.provider ?? "unknown"} · {state.execution?.executionMode ?? "fixture"}</p>
+                  <p>Cost {state.usage?.costStatus === "known" && state.usage.estimatedCostUsd !== null ? `$${state.usage.estimatedCostUsd}` : "unknown"}</p>
+                  <p>Transport agent SSE (`/runtime/investigate`)</p>
+                  {substitutions.length ? substitutions.map((item) => (
+                    <p key={`${item.specialist}-${item.reason}`}>Substituted {item.specialist}: {item.reason}</p>
+                  )) : <p>No specialist substitutions</p>}
+                </details>
+              ) : null}
+            </div>
+          </aside>
+        ) : null}
       </div>
       {evidence ? (
         <div className="drawer" role="dialog" aria-modal="true" aria-label="Supporting evidence">
