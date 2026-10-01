@@ -12,11 +12,24 @@ type Component = Record<string, unknown>;
 export function composeA2UI(surfaceId: string, presentation: PresentationInput): { messages: A2UIMessage[]; dataModel: Record<string, unknown> } {
   const view = presentation.view;
   const components: Component[] = [];
-  const rootChildren: string[] = ["header"];
+  const rootChildren: string[] = [];
 
-  components.push({ id: "header", component: "Column", children: ["title", "subtitle"] });
-  components.push({ id: "title", component: "Text", text: { path: "/title" }, variant: "h2" });
-  components.push({ id: "subtitle", component: "Text", text: { path: "/subtitle" } });
+  // Header is earned by non-empty title/subtitle from verified presentation — never chrome-only.
+  const hasTitle = Boolean(presentation.title?.trim());
+  const hasSubtitle = Boolean(presentation.subtitle?.trim());
+  if (hasTitle || hasSubtitle) {
+    const headerChildren: string[] = [];
+    if (hasTitle) {
+      headerChildren.push("title");
+      components.push({ id: "title", component: "Text", text: { path: "/title" }, variant: "h2" });
+    }
+    if (hasSubtitle) {
+      headerChildren.push("subtitle");
+      components.push({ id: "subtitle", component: "Text", text: { path: "/subtitle" } });
+    }
+    rootChildren.push("header");
+    components.push({ id: "header", component: "Column", children: headerChildren });
+  }
 
   const showMetrics = view !== "table" && view !== "form" && presentation.metrics.length > 0;
   if (showMetrics) {

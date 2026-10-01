@@ -30,6 +30,10 @@ export default defineConfig({
         MODEL_PROVIDER: "fixture",
         MODEL_EXECUTION_MODE: "fixture",
         INVESTIGATION_STEP_DELAY_MS: "1200",
+        // tsx auto-loads repo .env; empty RATE_LIMIT_PER_MINUTE becomes 0 and blocks every POST.
+        RATE_LIMIT_PER_MINUTE: "120",
+        // Web e2e serves on webPort, not the .env default :3000.
+        ALLOWED_ORIGINS: `http://127.0.0.1:${webPort},http://localhost:${webPort}`,
         RUNTIME_DB_PATH: join(tmpdir(), `anc-e2e-runtime-${Date.now()}.sqlite`),
         COMPANY_DB_PATH: resolve(root, "data/company.sqlite"),
       },

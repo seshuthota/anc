@@ -11,7 +11,7 @@ import { RuntimeStore } from "@anc/runtime-storage";
 import { validateA2UI } from "./a2ui-validate.js";
 import { composeA2UI } from "./composer.js";
 import { runSpecialist, specialistLabel } from "./specialists/index.js";
-import { CURRENT } from "./windows.js";
+import { CURRENT, TREND_WINDOW } from "./windows.js";
 
 export type GraphState = {
   objective: string;
@@ -91,12 +91,16 @@ function fingerprint(domain: Domain, question: string, entities: EntityRef[]) {
 }
 
 function task(domain: Domain, question: string, entities: EntityRef[] = [], capabilities: string[] = [], deps: string[] = []): InvestigationTask {
+  const trend = capabilities.includes("cap.service.trend");
+  const window = trend
+    ? { start: TREND_WINDOW.from, end: TREND_WINDOW.to, timezone: "UTC" as const, grain: "day" as const }
+    : { start: CURRENT.from, end: CURRENT.to, timezone: "UTC" as const, grain: "hour" as const };
   return {
     taskId: `task-${domain}-${randomUUID().slice(0, 8)}`,
     domain,
     question,
     entityScope: entities,
-    window: { start: CURRENT.from, end: CURRENT.to, timezone: "UTC", grain: "hour" },
+    window,
     dependencies: deps,
     status: "pending",
     attemptCount: 0,
@@ -519,11 +523,14 @@ export function toPresentation(
   const resolvedView = resolveView(view, { hasTable: rows.length > 0, hasChart: seriesPoints.length >= 2, hasDraft: Boolean(draftPayload), hasForm: intent === "prepare_assignment" || intent === "commit_assignment" });
   const quiet = !findings.some((finding) => finding.severity === "high" || finding.severity === "critical");
   const broad = isBroadObjective(objective);
-  const title = tablePayload?.title
-    || (rows.length && !broad ? (presentationFindings[0]?.title ?? "Results") : "")
-    || (release && !broad ? release.id : "")
-    || (customers.length === 1 && !broad ? (customers[0]?.label ?? customers[0]?.id ?? "Account") : "")
-    || (broad ? "Morning overview" : (presentationFindings[0]?.title ?? "Results"));
+  // Broad morning briefs keep a stable title even when a queue/table artifact is present.
+  const title = broad
+    ? "Morning overview"
+    : (tablePayload?.title
+      || (rows.length ? (presentationFindings[0]?.title ?? "Results") : "")
+      || (release ? release.id : "")
+      || (customers.length === 1 ? (customers[0]?.label ?? customers[0]?.id ?? "Account") : "")
+      || (presentationFindings[0]?.title ?? "Results"));
   const subtitle = view === "table" && tablePayload && !findings.length
     ? "Same records as the previous view, shown as a table."
     : quiet

@@ -215,3 +215,55 @@ describe("morning investigation", () => {
     expect(publicState("session:user-ops", "user-finance").surface).toBeNull();
   }, 60_000);
 });
+
+describe("toPresentation broad morning title", () => {
+  it("prefers Morning overview over queue table artifact titles", async () => {
+    const { toPresentation } = await import("./graph.js");
+    const presentation = toPresentation(
+      "work",
+      "What should I care about this morning?",
+      [
+        {
+          findingId: "f1",
+          taskId: "t1",
+          agentId: "reliability",
+          kind: "observation",
+          title: "Elevated error rate",
+          summary: "sync-service error rate is elevated.",
+          severity: "high",
+          entities: [],
+          claims: [
+            {
+              claimId: "c1",
+              statement: "Error rate elevated",
+              evidenceIds: ["ev-1"],
+              resultPaths: [],
+              entities: [],
+              metrics: [{ name: "error_rate", value: 0.12, unit: "ratio", aggregation: "rate" }],
+              limitations: [],
+              contradictoryEvidenceIds: [],
+            },
+          ],
+          createdAt: "2026-09-20T08:00:00.000Z",
+          limitations: [],
+        },
+      ],
+      false,
+      [],
+      [
+        {
+          id: "art-queue",
+          kind: "table",
+          payload: {
+            title: "Unassigned support queue",
+            columns: ["id", "subject"],
+            rows: [{ id: "ticket-1", cells: ["ticket-1", "Login"], entityType: "ticket", entityId: "ticket-1" }],
+          },
+        },
+      ],
+      "summary",
+    );
+    expect(presentation.title).toBe("Morning overview");
+    expect(presentation.view).toBe("summary");
+  });
+});

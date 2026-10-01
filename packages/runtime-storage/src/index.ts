@@ -152,6 +152,7 @@ export class RuntimeStore {
        VALUES (@id, @threadId, @runId, @message, @kind, @payload, @now, @ownerId)`,
     ).run({
       ...input,
+      message: String(input.message),
       runId: input.runId ?? null,
       ownerId: input.ownerId ?? "user-coo",
       payload: input.payload === undefined ? null : JSON.stringify(input.payload),
