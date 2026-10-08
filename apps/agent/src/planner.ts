@@ -261,3 +261,42 @@ export function validatePlan(plan: WorkPlan): string[] {
   }
   return errors;
 }
+
+/**
+ * R5: how a new turn relates to what is on screen. A `drill` goes deeper into the
+ * briefing (a "Look into this" click, or a question about a record the briefing
+ * showed) and is shown under the briefing's context header; an `action` works on
+ * the surface itself (propose, confirm, evidence) and never reaches the planner's
+ * work; a `new_topic` starts afresh with its own plan.
+ */
+export type TurnKind = "drill" | "action" | "new_topic";
+
+/** What a drill needs to know about the briefing it came from. */
+export type PriorBriefing = {
+  surfaceId: string;
+  revision: number;
+  /** The briefing's headline, used when the drill names no single item. */
+  label: string;
+  /** Records on the briefing: the primary's, the chain's and the secondary items'. */
+  entities: EntityRef[];
+  /** The drill questions the briefing offered, with the item each is about. */
+  drills: Array<{ question: string; label: string }>;
+};
+
+const SURFACE_ACTIONS = new Set(["propose_action", "confirm_action", "cancel_action", "prepare_assignment", "select_assignee", "commit_assignment", "show_evidence", "back_to_briefing", "save_draft", "set_selection"]);
+
+export function classifyTurn(input: { objective: string; action?: string; entities?: EntityRef[]; prior?: PriorBriefing }): { kind: TurnKind; label?: string } {
+  if (input.action && SURFACE_ACTIONS.has(input.action)) return { kind: "action" };
+  const text = input.objective.trim().toLowerCase();
+  // A new briefing request is a new topic even right after a briefing.
+  if (!input.prior || isBroadObjective(text)) return { kind: "new_topic" };
+  const offered = input.prior.drills.find((drill) => drill.question.trim().toLowerCase() === text);
+  if (offered) return { kind: "drill", label: offered.label };
+  const known = (entity: EntityRef) => input.prior!.entities.find((item) => item.type === entity.type && item.id === entity.id);
+  const selected = input.entities?.find(known);
+  if (selected) return { kind: "drill", label: known(selected)?.label ?? input.prior.label };
+  // A typed question that names a record the briefing showed, by id or by name.
+  const named = input.prior.entities.find((entity) => text.includes(entity.id.toLowerCase()) || (entity.label && entity.label.length >= 4 && text.includes(entity.label.toLowerCase())));
+  if (named) return { kind: "drill", label: named.label ?? input.prior.label };
+  return { kind: "new_topic" };
+}

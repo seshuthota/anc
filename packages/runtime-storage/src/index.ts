@@ -177,6 +177,12 @@ export class RuntimeStore {
     ).run({ ...input, payload: JSON.stringify(input.payload) });
   }
 
+  /** Findings by id, whatever run produced them (a saved surface lists the ids it shows). */
+  getFindings(findingIds: string[]): unknown[] {
+    if (!findingIds.length) return [];
+    return this.db.prepare(`SELECT payload FROM findings WHERE finding_id IN (${findingIds.map(() => "?").join(", ")})`).all(...findingIds).map((row) => JSON.parse((row as { payload: string }).payload));
+  }
+
   listFindings(runId: string): unknown[] {
     return this.db.prepare("SELECT payload FROM findings WHERE run_id = ?").all(runId).map((row) => JSON.parse((row as { payload: string }).payload));
   }

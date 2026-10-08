@@ -99,6 +99,10 @@ export const workspaceDefinitions = {
     description: "The briefing's one primary finding, built by the runtime: headline, one figure with its definition, window, denominator and evidence, why it matters, a cause chain of at most three hops, and confidence.",
     props: z.object({ finding: bound(z.any()) }),
   },
+  ContextHeader: {
+    description: "Built by the runtime above a drill-down: where it came from in the briefing, and Back to that briefing.",
+    props: z.object({ context: bound(z.any()) }),
+  },
   Collapsible: {
     description: "A disclosure that starts closed and opens in the browser only. For lower-priority material.",
     props: z.object({ summary: bound(z.string()), child: z.string() }),
@@ -373,6 +377,21 @@ export const workspaceCatalog = createCatalog(workspaceDefinitions, {
           ) : null}
         </div>
       </section>
+    );
+  },
+  ContextHeader: ({ props, dispatch }) => {
+    const context = (props.context && typeof props.context === "object" ? props.context : {}) as { label?: string; surfaceId?: string; revision?: number };
+    return (
+      <nav className="ws-context" data-a2ui="ContextHeader" aria-label="Where this came from">
+        <span className="ws-context-label">From your briefing: <strong>{context.label ?? ""}</strong></span>
+        <button
+          type="button"
+          className="ws-button ws-button-borderless ws-context-back"
+          onClick={() => dispatch?.({ event: { name: "back_to_briefing", context: { surfaceId: context.surfaceId, revision: context.revision } } })}
+        >
+          ▸ Back
+        </button>
+      </nav>
     );
   },
   Collapsible: ({ props, children }) => (

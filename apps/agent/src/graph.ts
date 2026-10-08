@@ -5,7 +5,7 @@ import { PRESENTATION_VIEWS, getMetricDefinition, type AgentFinding, type Domain
 import type { Principal } from "@anc/policy";
 import { hasGrant } from "@anc/policy";
 import { peekSubstitutions } from "./execution.js";
-import { isBroadObjective, MAX_TASKS, proposePlan, validatePlan } from "./planner.js";
+import { classifyTurn, isBroadObjective, MAX_TASKS, proposePlan, validatePlan, type PriorBriefing, type TurnKind } from "./planner.js";
 import { synthesize, type Synthesis } from "./synthesis.js";
 import { headlineMetrics, reconcileMetrics, type ReconcileResult } from "./reconcile.js";
 import { rankBriefing, type BriefingPlan } from "./rank.js";
@@ -14,6 +14,7 @@ import { RuntimeStore } from "@anc/runtime-storage";
 import { validateA2UI } from "./a2ui-validate.js";
 import { recordSubstitution } from "./execution.js";
 import { composeSurface } from "./ui-composer.js";
+import { withContextHeader } from "./composer.js";
 import { runSpecialist, specialistLabel } from "./specialists/index.js";
 import { CURRENT, TIMEZONE } from "./windows.js";
 
@@ -36,6 +37,12 @@ export type GraphState = {
   synthesis?: Synthesis;
   reconciled?: ReconcileResult;
   briefingPlan?: BriefingPlan;
+  /** R5: how this turn relates to the surface on screen when it was asked. */
+  turn?: TurnKind;
+  /** The briefing a drill came from, kept so the drill is shown under its context header. */
+  priorBriefing?: PriorBriefing;
+  /** What the drill is about, for the context header. */
+  drillLabel?: string;
 };
 
 const State = Annotation.Root({
@@ -72,6 +79,9 @@ const State = Annotation.Root({
   synthesis: Annotation<Synthesis | undefined>(),
   reconciled: Annotation<ReconcileResult | undefined>(),
   briefingPlan: Annotation<BriefingPlan | undefined>(),
+  turn: Annotation<TurnKind | undefined>(),
+  priorBriefing: Annotation<PriorBriefing | undefined>(),
+  drillLabel: Annotation<string | undefined>(),
 });
 
 export type ActivitySink = (message: string, kind?: "agent_started" | "agent_completed" | "tool_queried" | "finding_discovered" | "task_delegated" | "investigation_completed" | "status") => void;
@@ -148,12 +158,44 @@ function priorViewOf(store: RuntimeStore, threadId: string): string | undefined 
   return view || undefined;
 }
 
+/**
+ * The briefing on screen when this turn was asked: the active surface if it is a
+ * briefing, or the briefing a drill-down on screen came from. Read from the saved
+ * surfaces and their findings only.
+ */
+function priorBriefingOf(store: RuntimeStore, threadId: string): PriorBriefing | undefined {
+  const thread = store.getThreadState(threadId);
+  if (!thread?.activeSurfaceId || !thread.activeSurfaceRevision) return undefined;
+  const active = store.getSurface(thread.activeSurfaceId, thread.activeSurfaceRevision);
+  const context = (active?.dataModel as { context?: { surfaceId?: string; revision?: number } } | undefined)?.context;
+  const origin = context?.surfaceId && context.revision ? store.getSurface(context.surfaceId, context.revision) : active;
+  const briefing = (origin?.dataModel as { briefing?: {
+    primary?: { headline?: string };
+    secondary?: Record<string, { title?: string; question?: string }>;
+    actions?: Array<{ name?: string; question?: string }>;
+  } } | undefined)?.briefing;
+  if (!origin || !briefing) return undefined;
+  const label = briefing.primary?.headline ?? origin.title;
+  const drills = [
+    ...(briefing.actions ?? []).filter((action) => action.name === "investigate" && action.question).map((action) => ({ question: action.question!, label })),
+    ...Object.values(briefing.secondary ?? {}).filter((item) => item.question).map((item) => ({ question: item.question!, label: item.title ?? label })),
+  ];
+  const entities = entitiesFrom(store.getFindings(origin.findingIds) as AgentFinding[]);
+  return { surfaceId: origin.surfaceId, revision: origin.revision, label, entities, drills };
+}
+
 async function planNode(state: typeof State.State): Promise<Partial<GraphState>> {
   const ctx = ctxOf(state);
   await waitForTestDelay(ctx.checkCancelled);
   if (ctx.checkCancelled()) return { status: "cancelled" };
   // One round of work per question: the specialists run once, then the lead analyst connects what they found.
   if (Object.keys(state.tasks).length) return { intent: state.intent };
+  // R5: a drill keeps the briefing it came from; a new topic starts a fresh plan.
+  const prior = state.turn ? state.priorBriefing : priorBriefingOf(ctx.store, state.threadId);
+  const turn = state.turn ? { kind: state.turn, label: state.drillLabel } : classifyTurn({ objective: state.objective, action: state.intent || undefined, entities: state.selectedEntities, prior });
+  const turnState: Partial<GraphState> = turn.kind === "drill" && prior
+    ? { turn: "drill", priorBriefing: prior, drillLabel: turn.label ?? prior.label }
+    : { turn: turn.kind, priorBriefing: undefined, drillLabel: undefined };
   const plan = await proposePlan({
     objective: state.objective,
     action: state.intent ? { name: state.intent } as SemanticAction : undefined,
@@ -166,13 +208,13 @@ async function planNode(state: typeof State.State): Promise<Partial<GraphState>>
   if (planErrors.length) ctx.emit(`Plan adjusted: ${planErrors[0]}`, "status");
   if (plan.clarification && !plan.tasks.length) {
     ctx.emit(plan.clarification, "status");
-    return { intent: "clarification", view: "summary", clarification: plan.clarification, status: "completed" };
+    return { ...turnState, intent: "clarification", view: "summary", clarification: plan.clarification, status: "completed" };
   }
   if (plan.unsupported) {
     ctx.emit(plan.unsupported, "status");
-    return { intent: "unsupported", view: "summary", status: "completed" };
+    return { ...turnState, intent: "unsupported", view: "summary", status: "completed" };
   }
-  if (!plan.tasks.length) return { intent: plan.intent, view: plan.view };
+  if (!plan.tasks.length) return { ...turnState, intent: plan.intent, view: plan.view };
   const planned: InvestigationTask[] = plan.tasks.map((item) => task(item.domain, item.question, item.entities ?? state.selectedEntities, item.capabilities));
   const intent = plan.intent;
   const seen = new Set<string>();
@@ -185,7 +227,7 @@ async function planNode(state: typeof State.State): Promise<Partial<GraphState>>
     ctx.emit(`${specialistLabel(item.domain)} started`, "agent_started");
     ctx.store.upsertTask({ id: item.taskId, runId: state.runId, investigationId: state.investigationId, domain: item.domain, question: item.question, status: "pending", payload: item, now: new Date().toISOString() });
   }
-  return { tasks, intent, view: plan.view };
+  return { ...turnState, tasks, intent, view: plan.view };
 }
 
 async function executeNode(state: typeof State.State): Promise<Partial<GraphState>> {
@@ -256,14 +298,19 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   const artifacts = didWork ? current : [...current, ...listed.filter((item) => item.runId !== state.runId)];
   const presentation = toPresentation({ intent: state.intent, objective: state.objective, findings, failedDomains, artifacts, view: state.view, clarification: state.clarification, synthesis: state.synthesis, principal: ctx.principal, reconciled: state.reconciled, briefingPlan: state.briefingPlan, checkedDomains: [...new Set(Object.values(state.tasks).filter((item) => item.status !== "failed").map((item) => item.domain))] });
   const surfaceId = `surface-${state.investigationId}`;
-  const revision = (state.surfaceRevision ?? 0) + 1;
+  // One surface per thread, revisioned (R5): each turn adds a revision, never overwrites one.
+  const revision = Math.max(state.surfaceRevision ?? 0, ctx.store.latestSurfaceRevision(surfaceId)) + 1;
   ctx.emit("UI Composer is designing the workspace", "status");
-  const composed = await composeSurface(surfaceId, presentation, {
+  const body = await composeSurface(surfaceId, presentation, {
     objective: state.objective,
     runId: state.runId,
     mode: isBroadObjective(state.objective) ? "briefing" : "detail",
     audience: `${ctx.principal.title}. Cares about: ${ctx.principal.preferences.priorities.join(", ")}.`,
   });
+  // A drill replaces the body under "From your briefing: … ▸ Back" (R5).
+  const composed = state.turn === "drill" && state.priorBriefing
+    ? { ...body, ...withContextHeader(body, { label: state.drillLabel ?? state.priorBriefing.label, surfaceId: state.priorBriefing.surfaceId, revision: state.priorBriefing.revision }) }
+    : body;
   if (composed.reason) {
     // Not silent: a rejected model layout is reported and counted like any other substitution.
     ctx.emit("UI Composer layout was rejected; showing the standard layout", "status");
@@ -293,7 +340,10 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
     requiredGrants: [...new Set(Object.values(state.tasks).flatMap((task) => task.capabilities))],
     now: new Date().toISOString(),
   });
-  ctx.emit("Investigation completed", "investigation_completed");
+  // The trace's one summary line: how many specialists worked and how many records they read.
+  const agents = new Set(Object.values(state.tasks).map((item) => item.domain)).size;
+  const lookups = new Set(findings.flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds))).size;
+  ctx.emit(agents ? `Workspace ready · ${agents} agent${agents === 1 ? "" : "s"} · ${lookups} lookup${lookups === 1 ? "" : "s"}` : "Workspace ready", "investigation_completed");
   const failed = Object.values(state.results).some((result) => result.status === "failed");
   return {
     surfaceId,

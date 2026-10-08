@@ -541,3 +541,74 @@ describe("briefing actions (P4)", () => {
     expect(briefingOf(done).primary!.receipts!.at(-1)!.text).toMatch(new RegExp(`^Assigned ${open.length} late complaints to Farah Siddiqui, Karthik Iyer, Sneha Kulkarni · 0 still without an owner · receipt op-`));
   }, 180_000);
 });
+
+describe("follow-ups replace the body, not append (P5)", () => {
+  const BRIEF = "Brief me: what needs my attention this morning?";
+  type Surface = NonNullable<ReturnType<typeof publicState>["surface"]>;
+  const componentsOf = (surface: Surface) => ((surface.messages as Array<Record<string, unknown>>).find((message) => "updateComponents" in message) as { updateComponents: { components: Array<Record<string, unknown>> } }).updateComponents.components;
+  const count = (surface: Surface, type: string) => componentsOf(surface).filter((component) => component.component === type).length;
+  const anchors = (surface: Surface) => count(surface, "PrimaryFinding") + count(surface, "ContextHeader");
+  const contextOf = (surface: Surface) => (surface.dataModel as { context?: { label: string; surfaceId: string; revision: number } }).context;
+
+  it("drills under a context header on the same surface, keeps one anchor per turn, starts a new topic fresh, and Back restores revision N", async () => {
+    const thread = "t-followups";
+    const brief = (await runInvestigation({ question: BRIEF, threadId: thread, principal: coo })).surface!;
+    const n = brief.revision;
+    expect(anchors(brief)).toBe(1);
+    expect(count(brief, "PrimaryFinding")).toBe(1);
+    const secondary = Object.values((brief.dataModel as { briefing: { secondary: Record<string, { title: string; question: string }> } }).briefing.secondary);
+    expect(secondary.length).toBeGreaterThan(0);
+
+    // 1: "Look into this" on a secondary item.
+    const drill1 = (await runInvestigation({ question: secondary[0]!.question, threadId: thread, principal: coo })).surface!;
+    expect(drill1.surfaceId).toBe(brief.surfaceId);
+    expect(drill1.revision).toBe(n + 1);
+    expect(count(drill1, "ContextHeader")).toBe(1);
+    expect(count(drill1, "PrimaryFinding")).toBe(0);
+    expect(anchors(drill1)).toBe(1);
+    expect(contextOf(drill1)).toEqual({ label: secondary[0]!.title, surfaceId: brief.surfaceId, revision: n });
+    expect(componentsOf(drill1).find((component) => component.id === "root")!.children).toEqual(expect.arrayContaining(["context_header"]));
+    expect((componentsOf(drill1).find((component) => component.id === "root")!.children as string[])[0]).toBe("context_header");
+
+    // 2: a typed question about a record the briefing showed: still a drill from the same briefing.
+    const drill2 = (await runInvestigation({ question: "How is Godavari Organics doing on on-time delivery?", threadId: thread, principal: coo })).surface!;
+    expect(drill2.revision).toBe(n + 2);
+    expect(drill2.title).not.toBe("Not available");
+    expect(drill1.title).not.toBe("Not available");
+    expect(anchors(drill2)).toBe(1);
+    expect(contextOf(drill2)).toEqual({ label: "Godavari Organics", surfaceId: brief.surfaceId, revision: n });
+
+    // 3: a new briefing is a new topic: fresh plan, no context header.
+    const again = (await runInvestigation({ question: BRIEF, threadId: thread, principal: coo })).surface!;
+    expect(again.revision).toBe(n + 3);
+    expect(count(again, "ContextHeader")).toBe(0);
+    expect(count(again, "PrimaryFinding")).toBe(1);
+    expect(count(again, "Card")).toBe(count(brief, "Card"));
+    // Earlier revisions are kept, not overwritten.
+    expect(store.getSurface(brief.surfaceId, n)!.title).toBe(brief.title);
+    expect(store.getSurface(brief.surfaceId, n + 1)!.dataModel).toEqual(drill1.dataModel);
+
+    // An unrelated question after a drill is a new topic too.
+    const lockers = (await runInvestigation({ question: "Which parcel lockers are full?", threadId: thread, principal: coo })).surface!;
+    expect(lockers.revision).toBe(n + 4);
+    expect(count(lockers, "ContextHeader")).toBe(0);
+
+    // Back from a drill restores exactly the briefing revision it came from.
+    const hubBrief = (await runInvestigation({ question: BRIEF, threadId: "t-followups-back", principal: hubSupervisor })).surface!;
+    const drillQuestion = ((hubBrief.dataModel as { briefing: { actions: Array<{ id: string; question?: string }> } }).briefing.actions.find((action) => action.id === "drill_primary"))!.question!;
+    const drill = (await runInvestigation({ question: drillQuestion, threadId: "t-followups-back", principal: hubSupervisor })).surface!;
+    expect(contextOf(drill)).toMatchObject({ surfaceId: hubBrief.surfaceId, revision: hubBrief.revision });
+    const back = await handleAction({ name: "back_to_briefing", threadId: "t-followups-back", surfaceId: drill.surfaceId, surfaceRevision: drill.revision, parameters: contextOf(drill) }, hubSupervisor);
+    expect(back.surface!.revision).toBe(hubBrief.revision);
+    expect(count(back.surface!, "PrimaryFinding")).toBe(1);
+    expect(count(back.surface!, "ContextHeader")).toBe(0);
+    // Another thread's revision cannot be restored into this one.
+    await expect(handleAction({ name: "back_to_briefing", threadId: "t-followups-back", parameters: { surfaceId: brief.surfaceId, revision: n } }, hubSupervisor)).rejects.toThrow(/unknown surface revision/);
+  }, 240_000);
+
+  it("ends the trace with one summary line: agents and lookups", async () => {
+    const state = await runInvestigation({ question: BRIEF, threadId: "t-trace", principal: coo });
+    const last = state.activity.find((item) => item.kind === "investigation_completed")!;
+    expect(last.message).toMatch(/^Workspace ready · 4 agents · \d+ lookups$/);
+  }, 60_000);
+});

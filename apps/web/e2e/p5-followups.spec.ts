@@ -1,0 +1,80 @@
+import { expect, test, type Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+
+const outDir = resolve(__dirname, "../../../test-results");
+const primary = (page: Page) => page.locator('[data-a2ui="PrimaryFinding"]');
+const header = (page: Page) => page.locator('[data-a2ui="ContextHeader"]');
+const anchors = async (page: Page) => (await primary(page).count()) + (await header(page).count());
+const revision = async (page: Page) => {
+  const response = await page.request.get("http://127.0.0.1:4110/runtime/state", { headers: { "x-anc-principal": "user-coo" } });
+  return ((await response.json()) as { surface: { revision: number } }).surface.revision;
+};
+
+test("the trace is folded into one summary line, findings only, ending in Workspace ready", async ({ page }) => {
+  await page.goto("/");
+  await expect(primary(page)).toHaveCount(1, { timeout: 90_000 });
+  const trace = page.getByTestId("trace");
+  await expect(trace).not.toHaveAttribute("open", "");
+  await expect(trace.locator("summary")).toHaveText(/^How this was worked out · 4 agents · \d+ lookups$/, { timeout: 30_000 });
+  // Single column: the trace sits under the answer, not beside it.
+  const stage = await page.locator(".stage").boundingBox();
+  const workspace = await page.getByTestId("workspace").boundingBox();
+  const traceBox = await trace.boundingBox();
+  expect(traceBox!.y).toBeGreaterThan(workspace!.y + workspace!.height - 1);
+  expect(Math.abs(traceBox!.x - workspace!.x)).toBeLessThan(2);
+  expect(stage).not.toBeNull();
+  // Developer details only with ?dev=1.
+  await expect(page.locator(".dev-details")).toHaveCount(0);
+  await mkdir(outDir, { recursive: true });
+  await page.screenshot({ path: resolve(outDir, "p5-collapsed-trace.png"), fullPage: true });
+
+  await trace.locator("summary").click();
+  const items = trace.locator("li");
+  await expect(items.last()).toHaveText("Workspace ready");
+  const text = await trace.innerText();
+  expect(text).not.toMatch(/\bStarted\b|\bCompleted\b|\bcompleted\b/);
+  expect(text).not.toMatch(/218/);
+  expect(text).toMatch(/\d+ findings?/);
+
+  await page.goto("/?dev=1");
+  await expect(page.locator(".dev-details")).toHaveCount(1, { timeout: 30_000 });
+});
+
+test("briefing → Look into this → body replaced under a context header; a typed drill stays; Back restores revision N", async ({ page }) => {
+  await page.goto("/");
+  await expect(primary(page)).toHaveCount(1, { timeout: 90_000 });
+  await expect(page.getByTestId("trace").locator("summary")).toHaveText(/lookups$/, { timeout: 30_000 });
+  const n = await revision(page);
+
+  // "Look into this" on the primary, or on a lower-priority item when the primary's
+  // three buttons are all operations.
+  const drill = page.getByRole("button", { name: "Look into this" }).first();
+  if (!(await drill.isVisible())) await page.locator('[data-a2ui="Collapsible"] summary').click();
+  await drill.click();
+  // While it is worked on, the briefing stays on screen, dimmed.
+  await expect(page.locator(".workspace.updating")).toBeVisible();
+  await expect(primary(page)).toHaveCount(1);
+
+  await expect(header(page)).toHaveCount(1, { timeout: 60_000 });
+  await expect(primary(page)).toHaveCount(0);
+  await expect(header(page)).toContainText("From your briefing:");
+  await expect(page.locator(".workspace.updating")).toHaveCount(0);
+  expect(await anchors(page)).toBe(1);
+  expect(await revision(page)).toBe(n + 1);
+  await page.screenshot({ path: resolve(outDir, "p5-drill-down-back.png"), fullPage: true });
+
+  // A typed question about a record on the briefing is still a drill from it.
+  await page.getByLabel("Workspace question").fill("How is Godavari Organics doing on on-time delivery?");
+  await page.getByRole("button", { name: "Ask" }).click();
+  await expect(header(page)).toContainText("Godavari Organics", { timeout: 60_000 });
+  expect(await anchors(page)).toBe(1);
+  expect(await revision(page)).toBe(n + 2);
+
+  // Back restores exactly the briefing revision the drill came from.
+  await header(page).getByRole("button", { name: "▸ Back" }).click();
+  await expect(primary(page)).toHaveCount(1, { timeout: 30_000 });
+  await expect(header(page)).toHaveCount(0);
+  expect(await anchors(page)).toBe(1);
+  expect(await revision(page)).toBe(n);
+});

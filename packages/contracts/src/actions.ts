@@ -14,7 +14,9 @@ export const ActionNameSchema = z.enum([
   // Briefing operations (Slice 4): a catalog action is proposed, then confirmed or cancelled on the same surface.
   "propose_action",
   "confirm_action",
-  "cancel_action"
+  "cancel_action",
+  // Follow-ups (Slice 5): a drill-down's context header returns to the briefing revision it came from.
+  "back_to_briefing"
 ]);
 
 export const SemanticActionSchema = z.object({

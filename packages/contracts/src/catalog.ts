@@ -7,7 +7,7 @@
  * are registered on top of the basic catalog in `apps/web/lib/catalog.tsx`,
  * because the basic catalog has no data table, chart, key-figure tile, ordered
  * chain, selection that reports back to the agent, briefing primary-finding
- * block, or client-only disclosure (Collapsible).
+ * block, drill-down context header, or client-only disclosure (Collapsible).
  *
  * The server validator and the UI Composer both read this list, so neither can
  * accept or author a component the browser cannot draw.
@@ -27,6 +27,7 @@ export const BASIC_CATALOG_COMPONENTS = [
 export const WORKSPACE_EXTENSION_COMPONENTS = [
   "Chart",
   "Collapsible",
+  "ContextHeader",
   "EditField",
   "PrimaryFinding",
   "SelectOption",

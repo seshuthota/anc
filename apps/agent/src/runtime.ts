@@ -288,7 +288,8 @@ export function cancelRun(runId: string, threadId?: string) {
 export function restoreSurface(threadId: string, surfaceId: string, revision: number, ownerId = DEMO_OWNER_ID): PublicState {
   store.assertThreadOwner(threadId, ownerId);
   const surface = store.getSurface(surfaceId, revision);
-  if (!surface) throw new Error("unknown surface revision");
+  // Only this thread's own revisions can be restored into it.
+  if (!surface || surface.threadId !== threadId) throw new Error("unknown surface revision");
   const thread = store.getThreadState(threadId);
   store.setThreadState({
     threadId,
@@ -342,6 +343,10 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
   if (operation) authorizeBriefingOperation(store, principal, action.name, action.parameters);
   if (!store.rememberAction(action.actionId, threadId, new Date().toISOString())) {
     return current;
+  }
+  if (action.name === "back_to_briefing") {
+    // R5: "Back" on a drill-down's context header restores the briefing revision it came from.
+    return restoreSurface(threadId, String(action.parameters.surfaceId ?? ""), Number(action.parameters.revision ?? 0), principal.id);
   }
   if (current.surface && (action.surfaceId !== current.surface.surfaceId || action.surfaceRevision !== current.surface.revision)) {
     // A briefing operation clicked on an older revision (a double click, a second

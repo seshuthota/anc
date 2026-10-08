@@ -108,8 +108,9 @@ button { cursor: pointer; }
 .home .persona-select { border-color: var(--line); color: var(--ink); }
 ::view-transition-group(ask), ::view-transition-group(wordmark), ::view-transition-group(identity) { animation-duration: 0.4s; animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1); }
 
-/* ---- Stage: the answer, and beside it how it was worked out ---- */
-.stage { display: grid; gap: 44px; grid-template-columns: minmax(0, 1fr) 300px; margin: 0 auto; max-width: 1240px; padding: 40px 28px 96px; }
+/* ---- Stage: one column — the answer, then (folded) how it was worked out ---- */
+.stage { display: flex; flex-direction: column; gap: 28px; margin: 0 auto; max-width: 880px; padding: 40px 28px 96px; }
+.working-note { align-items: center; color: var(--ink-soft); display: flex; font-size: 15px; gap: 10px; margin: 0 0 -12px; }
 .workspace { min-width: 0; transition: opacity 0.2s; }
 .workspace.updating { opacity: 0.5; pointer-events: none; }
 
@@ -219,9 +220,14 @@ button { cursor: pointer; }
 .a2ui-input { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; width: 100%; }
 .a2ui-field-edited { color: var(--violet); font-size: 13px; }
 
-/* ---- The rail: who did what, in order ---- */
-.steps-panel { align-self: start; position: sticky; top: 92px; }
-.steps-heading h2 { font-size: 18px; font-weight: 700; margin: 0 0 14px; }
+/* ---- The quiet trace: folded under the answer, findings only ---- */
+.trace { border-top: 1px solid var(--line); padding-top: 14px; }
+.trace > summary { color: var(--ink-soft); cursor: pointer; font-size: 15px; font-weight: 600; list-style: none; }
+.trace > summary::-webkit-details-marker { display: none; }
+.trace > summary::before { content: "▸ "; }
+.trace[open] > summary::before { content: "▾ "; }
+.trace .steps { margin-top: 14px; }
+.dev-steps { font-size: 12px; margin: 8px 0; padding-left: 18px; }
 .steps { list-style: none; margin: 0; padding: 0; }
 .step { --actor: #8a8fa6; display: flex; gap: 12px; padding-bottom: 14px; position: relative; }
 .step:not(:last-child)::before { background: var(--line); bottom: 0; content: ""; left: 5px; position: absolute; top: 16px; width: 2px; }
@@ -259,7 +265,6 @@ button { cursor: pointer; }
   .masthead .question-form { flex-basis: 100%; max-width: none; order: 3; }
   .clock { display: none; }
   .stage { display: flex; flex-direction: column; gap: 32px; padding: 26px 16px 72px; }
-  .steps-panel { position: static; }
   .ws-h1, .ws-h2, .pending h2 { font-size: 34px; }
   .home .wordmark { font-size: 44px; }
   .ws-stop { padding-left: 46px; }
@@ -311,3 +316,9 @@ button { cursor: pointer; }
 
 /* A double click on an action must not select the card text around it. */
 .a2ui-root button { user-select: none; }
+
+/* ---- Drill-down: a slim header back to the briefing it came from (R5) ---- */
+.ws-context { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: flex; gap: 12px; justify-content: space-between; padding: 10px 16px; }
+.ws-context-label { color: var(--ink-soft); font-size: 15px; }
+.ws-context-label strong { color: var(--ink); }
+.ws-context-back { flex: none; }

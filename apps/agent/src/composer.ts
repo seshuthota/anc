@@ -356,3 +356,34 @@ function composeBriefing(surfaceId: string, presentation: PresentationInput, bri
   ];
   return { messages, dataModel };
 }
+
+/** Where a drill-down came from: shown as "From your briefing: <label> ▸ Back". */
+export type DrillContext = { label: string; surfaceId: string; revision: number };
+
+/**
+ * R5: a drill-down replaces the body under a slim context header instead of
+ * adding cards below the briefing. The header is built by the runtime (a model
+ * cannot author it) and placed first, whoever composed the body. "Back" restores
+ * the briefing revision the drill came from.
+ */
+export function withContextHeader(composed: { messages: A2UIMessage[]; dataModel: Record<string, unknown> }, context: DrillContext): { messages: A2UIMessage[]; dataModel: Record<string, unknown> } {
+  const dataModel = { ...composed.dataModel, context: { label: context.label, surfaceId: context.surfaceId, revision: context.revision } };
+  const messages = composed.messages.map((message) => {
+    if ("updateComponents" in message) {
+      const update = (message as { updateComponents: { surfaceId: string; components: Component[] } }).updateComponents;
+      const components = update.components
+        .filter((component) => component.id !== "context_header")
+        .map((component) => component.id === "root"
+          ? { ...component, children: ["context_header", ...((component.children as string[] | undefined) ?? []).filter((id) => id !== "context_header")] }
+          : component);
+      components.splice(1, 0, { id: "context_header", component: "ContextHeader", context: { path: "/context" } });
+      return { ...message, updateComponents: { ...update, components } } as A2UIMessage;
+    }
+    if ("updateDataModel" in message) {
+      const update = (message as { updateDataModel: { surfaceId: string; path: string; value: unknown } }).updateDataModel;
+      return { ...message, updateDataModel: { ...update, value: dataModel } } as A2UIMessage;
+    }
+    return message;
+  });
+  return { messages, dataModel };
+}

@@ -32,6 +32,50 @@ const ACTORS: Array<[pattern: RegExp, key: string, name: string]> = [
   [/^UI Composer\s+/, "composer", "UI composer"],
 ];
 
+type Step = PublicState["activity"][number];
+
+/**
+ * The quiet trace (R5): what each specialist found, not how it ran. Started and
+ * finished lines and the per-finding lines (which carry figures that belong to
+ * the evidence drawer) are folded into one line per specialist; the run ends with
+ * "Workspace ready". The full step list is kept for ?dev=1.
+ */
+function traceOf(steps: Step[]): { items: Array<{ id: string; actor: string; name: string; text: string; failed: boolean }>; agents: number; lookups: number | null } {
+  const found = new Map<string, number>();
+  for (const step of steps) {
+    if (step.kind !== "finding_discovered") continue;
+    const { actor } = describeStep(step.message);
+    found.set(actor, (found.get(actor) ?? 0) + 1);
+  }
+  let lookups: number | null = null;
+  const agents = new Set<string>();
+  const items: Array<{ id: string; actor: string; name: string; text: string; failed: boolean }> = [];
+  for (const step of steps) {
+    const described = describeStep(step.message);
+    const failed = /failed|could not|unavailable|rejected/i.test(step.message);
+    if (step.kind === "agent_started") { agents.add(described.actor); continue; }
+    if (step.kind === "task_delegated" || step.kind === "tool_queried") continue;
+    if (step.kind === "finding_discovered") {
+      if (described.actor === "analyst") items.push({ id: step.id, actor: "analyst", name: described.name, text: "Connected the findings", failed: false });
+      continue;
+    }
+    if (step.kind === "agent_completed") {
+      const count = found.get(described.actor) ?? 0;
+      items.push({ id: step.id, actor: described.actor, name: described.name, text: count ? `${count} finding${count === 1 ? "" : "s"}` : "Nothing to report", failed: false });
+      continue;
+    }
+    if (step.kind === "investigation_completed") {
+      const counted = step.message.match(/(\d+) lookups?/);
+      if (counted) lookups = Number(counted[1]);
+      items.push({ id: step.id, actor: "system", name: "", text: "Workspace ready", failed: false });
+      continue;
+    }
+    if (/^UI Composer is designing/.test(step.message)) continue;
+    items.push({ id: step.id, actor: described.actor, name: described.name, text: described.text, failed });
+  }
+  return { items, agents: agents.size, lookups };
+}
+
 function describeStep(message: string): { actor: string; name: string; text: string } {
   for (const [pattern, actor, name] of ACTORS) {
     if (pattern.test(message)) {
@@ -47,13 +91,13 @@ export default function HomePage() {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [evidence, setEvidence] = useState<EvidenceDrawerState | null>(null);
-  const [developerOpen, setDeveloperOpen] = useState(false);
+  // Run details are for developers only, behind ?dev=1.
+  const [developer, setDeveloper] = useState(false);
   // The landing view is only a question box. A surface takes over once asked for.
   const [home, setHome] = useState(true);
-  // What the current question was, and what was on screen before it. While a
-  // question is being worked on, the earlier answer is not shown.
+  // What the current question was. While it is worked on, the answer on screen
+  // stays visible but dimmed, so the page never goes blank between turns.
   const [asked, setAsked] = useState("");
-  const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   const [priorSteps, setPriorSteps] = useState<Set<string> | null>(null);
   const [principalId, setPrincipalId] = useState("user-coo");
   const [personas, setPersonas] = useState<PrincipalSummary[]>([]);
@@ -112,7 +156,7 @@ export default function HomePage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("dev") === "1") setDeveloperOpen(true);
+    if (params.get("dev") === "1") setDeveloper(true);
     const stored = window.localStorage.getItem(PRINCIPAL_STORAGE_KEY) ?? "user-coo";
     setPrincipalId(stored);
     void (async () => {
@@ -184,7 +228,6 @@ export default function HomePage() {
     const runId = `run-${crypto.randomUUID()}`;
     currentRunId.current = runId;
     setAsked(trimmed);
-    setAwaitingAnswer(true);
     setPriorSteps(new Set(earlier.map((item) => item.id)));
     showResults();
     setBusy(true);
@@ -294,7 +337,6 @@ export default function HomePage() {
     });
     if (response.ok) {
       setState(await response.json() as PublicState);
-      setAwaitingAnswer(false);
       showResults();
     }
   }
@@ -321,7 +363,6 @@ export default function HomePage() {
     setPrincipalId(nextId);
     setEvidence(null);
     setAsked("");
-    setAwaitingAnswer(false);
     setPriorSteps(null);
     currentRunId.current = null;
     setBusy(false);
@@ -341,10 +382,16 @@ export default function HomePage() {
       : state.activity.slice(0, state.activity.findIndex((item) => item.message === RUN_START) + 1 || state.activity.length);
     return [...newestFirst].reverse();
   }, [state.activity, priorSteps]);
-  // The earlier answer stays hidden until this question produces its own.
-  const superseded = awaitingAnswer && (working || state.status === "failed" || state.status === "cancelled");
-  const surface = superseded ? null : state.surface;
+  // The answer on screen stays while the next one is worked on (dimmed), and is
+  // replaced in place when it arrives (R5).
+  const surface = state.surface;
   const pending = working && !surface;
+  const trace = useMemo(() => traceOf(steps), [steps]);
+  const traceSummary = [
+    "How this was worked out",
+    trace.agents ? `${trace.agents} agent${trace.agents === 1 ? "" : "s"}` : "",
+    trace.lookups !== null ? `${trace.lookups} lookup${trace.lookups === 1 ? "" : "s"}` : working ? "working…" : "",
+  ].filter(Boolean).join(" · ");
   const identity = authMode === "oidc" ? (
     signedOut
       ? <a className="ghost" href="/api/auth/login">Sign in</a>
@@ -383,11 +430,17 @@ export default function HomePage() {
       </header>
       {home ? null : (
         <div className="stage">
-          <section className={working && surface ? "workspace updating" : "workspace"} aria-live="polite" aria-busy={busy}>
+          {working && surface ? (
+            <p className="working-note" role="status">
+              <span className="status-dot running" aria-hidden="true" />
+              {asked === BRIEFING ? "Preparing your morning briefing" : asked ? `Looking into: ${asked}` : "Working on it"}
+            </p>
+          ) : null}
+          <section className={working && surface ? "workspace updating" : "workspace"} aria-live="polite" aria-busy={busy} data-testid="workspace">
             {pending ? (
               <div className="pending" role="status">
                 <h2>{asked === BRIEFING ? "Preparing your morning briefing" : asked || "Working on it"}</h2>
-                <p className="muted">{steps[steps.length - 1]?.message ?? "Starting…"}</p>
+                <p className="muted">{trace.items[trace.items.length - 1]?.text ?? "Starting…"}</p>
                 <div className="skeleton" aria-hidden="true"><span /><span /><span /></div>
               </div>
             ) : surface ? (
@@ -398,50 +451,49 @@ export default function HomePage() {
             ) : (
               <div className="pending">
                 {asked && asked !== BRIEFING ? <h2>{asked}</h2> : null}
-                <p className="muted">{steps[steps.length - 1]?.message ?? "Nothing to show yet."}</p>
+                <p className="muted">{trace.items[trace.items.length - 1]?.text ?? "Nothing to show yet."}</p>
               </div>
             )}
           </section>
-          <aside className="steps-panel" aria-label="Progress">
-            <div className="steps-heading">
-              <h2>How this was worked out</h2>
-            </div>
+          <details className="trace" data-testid="trace" aria-label="How this was worked out">
+            <summary>{traceSummary}</summary>
             <ol className="steps">
-              {steps.map((item, index) => {
-                const current = working && index === steps.length - 1;
-                const failed = /failed|could not|unavailable|rejected/i.test(item.message);
-                const step = describeStep(item.message);
+              {trace.items.map((item, index) => {
+                const current = working && index === trace.items.length - 1;
                 return (
-                  <li key={item.id} className={`step actor-${step.actor}${current ? " current" : ""}${failed ? " failed" : ""}`}>
+                  <li key={item.id} className={`step actor-${item.actor}${current ? " current" : ""}${item.failed ? " failed" : ""}`}>
                     <span className="step-mark" aria-hidden="true" />
                     <div>
-                      {step.name ? <span className="step-actor">{step.name}</span> : null}
-                      <p>{step.text}</p>
+                      {item.name ? <span className="step-actor">{item.name}</span> : null}
+                      <p>{item.text}</p>
                     </div>
                   </li>
                 );
               })}
-              {!steps.length ? <li className="step actor-system"><span className="step-mark" aria-hidden="true" /><div><p>Nothing has been asked yet.</p></div></li> : null}
+              {!trace.items.length ? <li className="step actor-system"><span className="step-mark" aria-hidden="true" /><div><p>Nothing has been asked yet.</p></div></li> : null}
             </ol>
-            {working ? null : (
-              <details className="dev-details" open={developerOpen} onToggle={(event) => setDeveloperOpen(event.currentTarget.open)}>
-                <summary>Previous views and run details</summary>
-                {state.surfaceHistory.map((item) => (
-                  <button key={`${item.surfaceId}-${item.revision}`} className="ghost history" type="button" onClick={() => void restore(item)}>
-                    {item.title}
-                  </button>
-                ))}
-                <p>Run {state.runId ?? "none"}</p>
-                <p>Investigation {state.investigationId ?? "none"}</p>
-                <p>Revision {state.surface?.revision ?? "—"}</p>
-                <p>Provider {state.execution?.provider ?? "unknown"} · {state.execution?.executionMode ?? "fixture"}</p>
-                <p>Cost {state.usage?.costStatus === "known" && state.usage.estimatedCostUsd !== null ? `$${state.usage.estimatedCostUsd}` : "unknown"}</p>
-                {substitutions.length ? substitutions.map((item) => (
-                  <p key={`${item.specialist}-${item.reason}`}>Substituted {item.specialist}: {item.reason}</p>
-                )) : <p>No specialist substitutions</p>}
-              </details>
-            )}
-          </aside>
+          </details>
+          {developer && !working ? (
+            <details className="dev-details" open>
+              <summary>Developer: every step, previous views and run details</summary>
+              <ol className="dev-steps">
+                {steps.map((item) => <li key={item.id}>{activityKindLabel(item.kind)} · {item.message}</li>)}
+              </ol>
+              {state.surfaceHistory.map((item) => (
+                <button key={`${item.surfaceId}-${item.revision}`} className="ghost history" type="button" onClick={() => void restore(item)}>
+                  {item.title} · revision {item.revision}
+                </button>
+              ))}
+              <p>Run {state.runId ?? "none"}</p>
+              <p>Investigation {state.investigationId ?? "none"}</p>
+              <p>Revision {state.surface?.revision ?? "—"}</p>
+              <p>Provider {state.execution?.provider ?? "unknown"} · {state.execution?.executionMode ?? "fixture"}</p>
+              <p>Cost {state.usage?.costStatus === "known" && state.usage.estimatedCostUsd !== null ? `$${state.usage.estimatedCostUsd}` : "unknown"}</p>
+              {substitutions.length ? substitutions.map((item) => (
+                <p key={`${item.specialist}-${item.reason}`}>Substituted {item.specialist}: {item.reason}</p>
+              )) : <p>No specialist substitutions</p>}
+            </details>
+          ) : null}
         </div>
       )}
       {evidence ? <EvidenceDrawer key={evidence.items.map((item) => item.evidenceId).join("|")} state={evidence} onClose={() => setEvidence(null)} /> : null}
