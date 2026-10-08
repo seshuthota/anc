@@ -26,8 +26,10 @@ describe("reconcileMetrics", () => {
     const result = reconcileMetrics(load("conflict-905-vs-902"));
     expect(result.metrics.filter((metric) => metric.metricId === "parcels_at_risk_today")).toEqual([]);
     expect(result.conflicts).toHaveLength(1);
-    expect(result.notes[0]).toMatch(/905/);
-    expect(result.notes[0]).toMatch(/902/);
+    // The figures stay in the conflict for developers; the note shown to people has none.
+    expect(result.conflicts[0]!.values).toEqual([905, 902]);
+    expect(result.notes[0]).toBe("Two sources disagree on parcels at risk today, so it's held back until resolved");
+    expect(result.notes[0]).not.toMatch(/\d/);
   });
 
   it("returns no headline metrics on a quiet day", () => {

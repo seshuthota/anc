@@ -123,7 +123,8 @@ export function reconcileMetrics(findings: AgentFinding[]): ReconcileResult {
     const sample = items[0]!;
     const def = getMetricDefinition(sample.metricId)!;
     if (values.length > 1) {
-      const note = `${def.label} disagree (${values.map((value) => value.toLocaleString("en-IN")).join(" vs ")}); not shown until resolved`;
+      // Person-facing, so it never prints the figures it is withholding (they stay in `values`).
+      const note = `Two sources disagree on ${def.label.charAt(0).toLowerCase()}${def.label.slice(1)}, so it's held back until resolved`;
       conflicts.push({ metricId: sample.metricId, scopeKey: scopeKey(sample.scope), values, note });
       continue;
     }

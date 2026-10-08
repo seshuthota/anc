@@ -180,8 +180,8 @@ export function rankBriefing(input: {
   if (!primaryPick) {
     const secondary = ranked.slice(0, 3).map((item) => ({ findingId: item.finding.findingId, title: item.finding.title }));
     const reason = reconciled.conflicts.length
-      ? `No single headline: ${reconciled.notes[0] ?? "the specialists' figures disagree"}`
-      : "No single headline: the serious findings carry no figure that can stand for the whole network";
+      ? `${(reconciled.notes[0] ?? "Two sources disagree on a figure, so it's held back until resolved").replace(/^./, (first) => first.toUpperCase())}.`
+      : "No single figure can headline this morning: the serious findings carry none that stands for the whole network.";
     return { secondary, quiet: false, withheld: reason, actions: [] };
   }
 

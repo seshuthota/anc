@@ -54,7 +54,9 @@ describe("rankBriefing after P1 review", () => {
     expect(plan.primary?.findingId).not.toBe("f-ship");
     expect(plan.primary).toBeUndefined();
     expect(plan.quiet).toBe(false);
-    expect(plan.withheld).toMatch(/905 vs 902/);
+    // The body says what is held back without printing the figures it withholds.
+    expect(plan.withheld).toBe("Two sources disagree on parcels at risk today, so it's held back until resolved.");
+    expect(plan.withheld).not.toMatch(/\d/);
     // The conflicted findings are not offered as secondary lines either.
     expect(plan.secondary.map((item) => item.findingId)).not.toContain("f-905");
     expect(plan.secondary.map((item) => item.findingId)).not.toContain("f-902");

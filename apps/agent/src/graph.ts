@@ -553,7 +553,8 @@ export function toPresentation(source: PresentationSource): PresentationInput {
       actions: [],
       limitations: [
         ...unavailable,
-        ...(reconciled?.notes ?? []),
+        // A note the body already says (the withheld headline) is not repeated in the footer.
+        ...(reconciled?.notes ?? []).filter((note) => !(plan.withheld ?? "").includes(note)),
         briefing.primary?.chain.some((hop) => hop.kind === "inferred") ? "Links marked as inferred are the analyst's reasoning across findings, not something a system recorded." : "",
       ].filter(Boolean),
     };
@@ -595,7 +596,7 @@ export function toPresentation(source: PresentationSource): PresentationInput {
     actions: [],
     limitations: [
       ...unavailable,
-      ...(reconciled?.notes ?? []),
+      ...(reconciled?.notes ?? []).filter((note) => !(plan?.withheld ?? "").includes(note)),
       plan?.withheld ?? "",
       synthesis?.steps.some((step) => step.kind === "inferred") ? "Links marked as inferred are the analyst's reasoning across findings, not something a system recorded." : "",
       objective && !broad ? `Question: ${objective}` : "",
