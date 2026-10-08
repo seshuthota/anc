@@ -1,4 +1,4 @@
-> **Scenario note (2026-10-08):** The running product scenario is now an **Indian parcel network**, not the earlier B2B product-release demo described in older roadmap rows below. Architecture and shell principles in this roadmap still apply. Parcel demo details: [demo-scenario.md](demo-scenario.md). Historical companion docs live under [archive/](archive/).
+> **Scenario note (2026-10-08):** The running product scenario is an **Indian parcel network**. Persona and acceptance wording below matches parcel roles (COO, hub, last-mile, accounts, care). Architecture and shell principles still apply. Demo details: [demo-scenario.md](demo-scenario.md). Pre-parcel companion docs: [archive/](archive/).
 
 # Agent-native enterprise workspace: implementation roadmap
 
@@ -12,7 +12,7 @@ Basis: source inspection, the fixture test suite, and a fixture execution of the
 
 Build one enterprise workspace that any authorized employee can use to accomplish business tasks through natural language. Specialized agents use company tools/MCPs, collaborate through shared runtime state, and dynamically assemble the information, workflows, and interface appropriate to the user's intent, context, and permissions.
 
-An operations head, finance head, support head, and COO use the same shell. Role informs relevance and defaults; it does not prescribe a dashboard or limit the user to one business domain. Permissions are separate, enforced constraints. A job title must not implicitly grant unrestricted access.
+A COO, hub manager, last-mile lead, accounts manager, and care lead use the same shell. Role informs relevance and defaults; it does not prescribe a dashboard or limit the user to one business domain. Permissions are separate, enforced constraints. A job title must not implicitly grant unrestricted access.
 
 Investigation remains one regression scenario. The product also supports retrieving records, comparisons, preparing work, editing drafts, and executing permitted business operations. Generated UI must support interaction, not merely display an answer.
 
@@ -120,7 +120,7 @@ Primary files: `apps/web/app/page.tsx`, `apps/agent/src/index.ts`, `runtime.ts`,
 
 Dependencies: P0. Estimate: 4–7 days.
 
-- [x] Seed operations, finance, support, and COO personas with an explicit grant matrix: capabilities, records, sensitive fields, operations.
+- [x] Seed COO, hub, last-mile, accounts, and care personas with an explicit grant matrix: capabilities, records, sensitive fields, operations.
 - [x] Add server-side principal resolution. A local-only persona switcher can simulate seeded users, but must be labeled and disabled outside demo mode.
 - [x] Separate relevance preferences from grants; permit cross-domain requests when authorized.
 - [x] Scope sessions, evidence, artifacts, surfaces, events, caches, and checkpoint namespaces by organization and owner/access policy. Stop relying on one default thread.
@@ -151,7 +151,7 @@ Dependencies: P1. Estimate: 3–5 days.
 Dependencies: P2. Estimate: 5–8 days.
 
 - [x] Generalize investigation task/results to work tasks and typed artifacts, retaining compatibility with current fixtures and stored runs.
-- [x] Replace keyword routing with structured plans using the user objective, authorized capabilities, and session context. Fixture mode scores the capability catalog and may schedule one finance follow-up after affected accounts are known. Live mode sends authorized schemas, user context, and the objective to the model, including that follow-up; the runtime validates, grants-filters, drops writes, caps tasks at three, and executes the result. Live-strict does not substitute the fixture planner. Live-fallback records the substitution.
+- [x] Replace keyword routing with structured plans using the user objective, authorized capabilities, and session context. Fixture mode scores the capability catalog and may schedule a shipper-impact follow-up after at-risk parcels are known. Live mode sends authorized schemas, user context, and the objective to the model, including that follow-up; the runtime validates, grants-filters, drops writes, caps tasks at three, and executes the result. Live-strict does not substitute the fixture planner. Live-fallback records the substitution.
 - [x] Validate known capabilities, permissions, input types, acyclic dependencies, artifact references, and total task/tool/time/token budgets before scheduling.
 - [x] Begin with at most three concurrent specialist tasks and bounded replanning. Runtime code owns scheduling; model text cannot create unlimited work.
 - [x] Keep selected entities, explicit periods, relevant prior artifacts, and user edits into follow-ups. Resolve “these customers” from state.
@@ -161,7 +161,7 @@ Dependencies: P2. Estimate: 5–8 days.
 
 Primary files: `graph.ts`, `runtime.ts`, specialist loop, new planner/registry modules, contracts/storage.
 
-**Exit gate:** finance, support, and operations requests generate different valid plans; one cross-domain request coordinates specialists; an unsupported request stops honestly. Paraphrases do not require new routing branches, and follow-ups preserve scope.
+**Exit gate:** accounts, care, hub, and last-mile requests generate different valid plans; one cross-domain request coordinates specialists; an unsupported request stops honestly. Paraphrases do not require new routing branches, and follow-ups preserve scope.
 
 ### P4 — Dynamic interactive UI
 
@@ -236,7 +236,7 @@ These are target scenarios. Audit existing data/tool coverage and implement miss
 | Operations: service health and recent changes this week | Telemetry/releases with explicit period | Trend, timeline, scoped details |
 | Accounts: compare overdue balances by shipper | Billing records and deterministic aging | Sortable table, totals, customer details |
 | Support: unassigned escalations; assign one | Queue query, prepare/commit assignment | Queue, detail, assignment form, receipt |
-| COO: customer problems requiring coordination | Authorized support/operations/finance synthesis | Prioritized cross-domain summary and sources |
+| COO: shipper problems requiring coordination | Authorized network/shipments/last-mile/customers synthesis | Prioritized cross-domain summary and sources |
 | Any permitted user: “Only these customers, last month, as a table” | Resolve prior selection; change period/view | Updated view retaining context |
 | Any user: draft customer onboarding checklist | Retrieve context; propose steps | Editable draft, explicit assumptions |
 | Restricted user: inaccessible financial information | Enforce access before model exposure | Clear limitation; permitted alternatives |
@@ -298,7 +298,7 @@ Then deliver four local personas and isolated sessions in P1. The next product c
 | --- | --- | --- |
 | Initial users | Four synthetic personas, private sessions | P1 before real authentication |
 | First new read | Aging-balance comparison using seeded billing rows | P2 coverage audit |
-| First write | Synthetic support-ticket assignment | P5 coverage audit |
+| First write | Synthetic complaint assignment | P5 coverage audit |
 | UI approach | Existing stack, A2UI, constrained reusable catalog | P4 integration verification |
 | Agent deployment | Configurable specialists in one runtime | Only if scale/isolation requires change |
 | Shared employee sessions | Deferred; explicit access design required | After P6 |
