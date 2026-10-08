@@ -24,6 +24,8 @@ test("one click on the headline figure opens its definition and highlighted sour
   await expect(drawer).not.toContainText("groupBy");
   await expect(drawer).not.toContainText("sortedNotLoaded");
   await expect(drawer).not.toContainText("Read from");
+  await expect(drawer.locator(".ev-meta")).toContainText("Fromshipments promised today");
+  await expect(drawer).not.toContainText("Company tool");
   await expect(drawer.locator("details.ev-raw")).toHaveCount(0);
   const outDir = resolve(__dirname, "../../../test-results");
   await mkdir(outDir, { recursive: true });
@@ -37,7 +39,7 @@ test("one click on the headline figure opens its definition and highlighted sour
   await expect(drawer).toBeVisible();
   const tabs = drawer.getByRole("tab");
   expect(await tabs.count()).toBeGreaterThan(1);
-  await expect(drawer.getByRole("tab", { selected: true })).toContainText(/summarize at risk shipments/i);
+  await expect(drawer.getByRole("tab", { selected: true })).toHaveText("Shipments promised today");
   await page.screenshot({ path: resolve(outDir, "p3-evidence-drawer-tabs.png"), fullPage: true });
 });
 

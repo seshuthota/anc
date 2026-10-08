@@ -357,6 +357,8 @@ button { cursor: pointer; }
 .ev-excerpt th { color: var(--text-3); font-weight: 500; }
 .ev-excerpt tr:last-child td { border-bottom: 0; }
 .ev-excerpt tr.is-highlighted { background: rgba(139, 140, 255, 0.06); }
+.ev-excerpt tr.is-cited { background: rgba(139, 140, 255, 0.05); }
+.ev-excerpt tr.is-cited td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .ev-hit { font-weight: 600; }
 .ev-raw { margin-top: 16px; }
 .ev-raw summary { color: var(--text-3); cursor: pointer; font-size: 13px; }

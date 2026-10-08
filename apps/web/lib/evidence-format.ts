@@ -90,10 +90,29 @@ export function isInternalField(name: string): boolean {
 /** Plumbing a person does not need: how the tool was paged or grouped. */
 const HIDDEN_FILTERS = new Set(["groupBy", "page", "limit", "offset", "idempotencyKey", "requestedBy"]);
 
-export function describeFilters(filters: Record<string, unknown>): string[] {
+/** Names for ids, from the runtime's explanation (`labels`). */
+export type Labels = Record<string, string>;
+
+/** Looks like a record key ("hub-hyd", "lock-velachery", "shipper-003"), not words. */
+export function looksLikeId(value: string): boolean {
+  return /^[a-z]+(-[a-z0-9]+)+$/.test(value);
+}
+
+/**
+ * The filters a tool was asked with, in words. An id filter shows its name
+ * ("Hub: Hyderabad Hub"); one with no known name is dropped outside developer view.
+ */
+export function describeFilters(filters: Record<string, unknown>, labels: Labels = {}, developer = false): string[] {
   const shown: string[] = [];
   for (const [key, value] of Object.entries(filters)) {
     if (HIDDEN_FILTERS.has(key) || value === undefined || value === null || value === false) continue;
+    if (/.Id$/.test(key) || (typeof value === "string" && looksLikeId(value))) {
+      const label = fieldLabel(/.Id$/.test(key) ? key.slice(0, -2) : key);
+      const name = typeof value === "string" ? labels[value] : undefined;
+      if (name) shown.push(`${label}: ${name}`);
+      else if (developer) shown.push(`${label}: ${String(value)}`);
+      continue;
+    }
     if (key === "window" && value && typeof value === "object") {
       const window = value as { from?: string; to?: string };
       shown.push(`From ${formatIstTime(window.from)} to ${formatIstTime(window.to)}`);
@@ -105,8 +124,16 @@ export function describeFilters(filters: Record<string, unknown>): string[] {
   return shown;
 }
 
-/** A cell or filter value in person wording: IST times, dates, percentages, yes/no. */
-export function formatValue(value: unknown, field = ""): string {
+/** Where a metric applies: the named hub or locker, "whole network", or nothing when only an id is known. */
+export function scopeLabel(scope: { type: string; id?: string } | null | undefined, labels: Labels = {}, developer = false): string | null {
+  if (!scope) return null;
+  if (!scope.id) return scope.type === "network" ? "whole network" : null;
+  if (labels[scope.id]) return labels[scope.id]!;
+  return developer ? `${scope.type}: ${scope.id}` : null;
+}
+
+/** A cell or filter value in person wording: IST times, dates, percentages, yes/no, named ids, capitalised codes. */
+export function formatValue(value: unknown, field = "", labels: Labels = {}): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") {
@@ -116,14 +143,47 @@ export function formatValue(value: unknown, field = ""): string {
   if (typeof value === "string") {
     if (ISO_TIME.test(value)) return formatIstTime(value);
     if (ISO_DATE.test(value)) return formatDate(value);
+    if (labels[value]) return labels[value]!;
     if (/^[a-z]+(_[a-z]+)+$/.test(value)) return fieldLabel(value);
+    // A one-word code from the company system ("high", "departed", "standard").
+    if (/^[a-z]+$/.test(value)) return value.charAt(0).toUpperCase() + value.slice(1);
     return value;
   }
   return JSON.stringify(value);
 }
 
-/** "summarize_at_risk_shipments" → "Summarize at risk shipments". */
+/** "summarize_at_risk_shipments" → "Summarize at risk shipments" (developer view only). */
 export function toolLabel(tool: string): string {
   const words = tool.replaceAll("_", " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** What each company tool reads, in words: the drawer's "From" line and tab titles. */
+const SOURCES: Record<string, string> = {
+  get_hub_status: "hub sort floors right now",
+  get_hub_throughput: "hour-by-hour hub throughput",
+  list_equipment_events: "equipment events in the hub maintenance log",
+  list_route_runs: "today's delivery route runs",
+  get_shipment: "the parcel's record",
+  search_shipments: "parcel records",
+  summarize_at_risk_shipments: "shipments promised today",
+  get_delivery_performance: "delivery performance against promise",
+  list_locker_sites: "parcel locker sites",
+  get_locker_site: "the locker site's record",
+  search_shippers: "shipper accounts",
+  get_shipper: "the shipper's account",
+  get_shipper_on_time: "shippers' on-time commitments",
+  list_complaints: "customer complaints",
+  list_eligible_assignees: "the customer-care team",
+};
+
+/** "shipments promised today"; an unmapped tool becomes "company records". */
+export function sourceLabel(tool: string): string {
+  return SOURCES[tool] ?? "company records";
+}
+
+/** A tab title, sentence case to match the body: "Shipments promised today". */
+export function sourceTitle(tool: string): string {
+  const label = sourceLabel(tool);
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }

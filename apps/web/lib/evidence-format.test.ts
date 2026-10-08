@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { describeFilters, fieldLabel, formatIstTime, formatValue, isInternalField, toolLabel } from "./evidence-format";
+import { TOOL_CAPABILITIES, WRITE_CAPABILITIES } from "@anc/policy";
+import { describeFilters, fieldLabel, formatIstTime, formatValue, isInternalField, scopeLabel, sourceLabel, sourceTitle, toolLabel } from "./evidence-format";
 
 describe("evidence drawer wording", () => {
   it("formats times in IST, whatever offset they carry", () => {
@@ -35,5 +36,37 @@ describe("evidence drawer wording", () => {
     expect(formatValue(null)).toBe("—");
     expect(formatValue("2026-09-20T22:10:00.000+05:30")).toBe("22:10 IST, Sun 20 Sep");
     expect(formatValue("key_account")).toBe("Key account");
+  });
+
+  it("names the source in words, for every read tool, and titles tabs in sentence case", () => {
+    expect(sourceLabel("summarize_at_risk_shipments")).toBe("shipments promised today");
+    expect(sourceTitle("summarize_at_risk_shipments")).toBe("Shipments promised today");
+    expect(sourceTitle("list_route_runs")).toBe("Today's delivery route runs");
+    const reads = Object.entries(TOOL_CAPABILITIES).filter(([, capability]) => !WRITE_CAPABILITIES.includes(capability)).map(([tool]) => tool);
+    for (const tool of [...reads, "list_eligible_assignees"]) {
+      expect(sourceLabel(tool), tool).not.toBe("company records");
+      expect(sourceLabel(tool), tool).not.toMatch(/_/);
+    }
+  });
+
+  it("shows names, never raw ids, outside developer view", () => {
+    const labels = { "hub-hyd": "Hyderabad Hub", "lock-velachery": "Velachery MRTS Station" };
+    expect(scopeLabel({ type: "hub", id: "hub-hyd" }, labels)).toBe("Hyderabad Hub");
+    expect(scopeLabel({ type: "locker", id: "lock-velachery" }, labels)).toBe("Velachery MRTS Station");
+    expect(scopeLabel({ type: "hub", id: "hub-blr" }, labels)).toBeNull();
+    expect(scopeLabel({ type: "hub", id: "hub-blr" }, labels, true)).toBe("hub: hub-blr");
+    expect(scopeLabel({ type: "network" })).toBe("whole network");
+    expect(describeFilters({ hubId: "hub-hyd", serviceDate: "2026-09-21" }, labels)).toEqual(["Hub: Hyderabad Hub", "Service date: Mon 21 Sep"]);
+    expect(describeFilters({ hubId: "hub-blr" }, labels)).toEqual([]);
+    expect(describeFilters({ hubId: "hub-blr" }, labels, true)).toEqual(["Hub: hub-blr"]);
+    expect(describeFilters({ siteId: "lock-velachery" }, labels)).toEqual(["Site: Velachery MRTS Station"]);
+    expect(formatValue("lock-velachery", "lockerSiteId", labels)).toBe("Velachery MRTS Station");
+  });
+
+  it("capitalises one-word codes from the company system", () => {
+    expect(formatValue("high", "severity")).toBe("High");
+    expect(formatValue("departed", "status")).toBe("Departed");
+    expect(formatValue("standard", "tier")).toBe("Standard");
+    expect(formatValue("Hyderabad Hub", "hubName")).toBe("Hyderabad Hub");
   });
 });

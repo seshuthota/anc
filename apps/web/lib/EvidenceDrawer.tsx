@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { describeFilters, fieldLabel, formatIstTime, formatValue, isInternalField, toolLabel } from "./evidence-format";
+import { describeFilters, fieldLabel, formatIstTime, formatValue, isInternalField, scopeLabel, sourceLabel, sourceTitle, toolLabel } from "./evidence-format";
 
 /** What `GET /runtime/evidence/:id/explain` returns (see apps/agent/src/evidence-explain.ts). */
 export type EvidenceExplanation = {
@@ -15,7 +15,8 @@ export type EvidenceExplanation = {
   value: unknown;
   filters: Record<string, unknown>;
   dataAsOf: string | null;
-  excerpt: { columns: string[]; rows: unknown[][]; highlight: { row: number; column: string } | null; from: string; total: number };
+  excerpt: { columns: string[]; rows: unknown[][]; highlight: { row: number; column: string } | null; from: string; total: number; cited?: { count: number; label: string; noun: string } };
+  labels?: Record<string, string>;
   raw: Record<string, unknown>;
 };
 
@@ -57,7 +58,7 @@ export function EvidenceDrawer({ state, onClose, developer = false }: { state: E
                 className={index === active ? "ev-tab is-active" : "ev-tab"}
                 onClick={() => setActive(index)}
               >
-                {toolLabel(entry.explanation?.tool ?? String(entry.raw?.tool ?? entry.evidenceId))}
+                {sourceTitle(entry.explanation?.tool ?? String(entry.raw?.tool ?? ""))}
               </button>
             ))}
           </div>
@@ -84,11 +85,21 @@ function EvidencePanel({ item, developer }: { item: EvidenceItem; developer: boo
     );
   }
   const { excerpt } = explained;
-  const filters = describeFilters(explained.filters ?? {});
+  const labels = explained.labels ?? {};
+  const filters = describeFilters(explained.filters ?? {}, labels, developer);
+  const cited = excerpt.cited && !excerpt.highlight ? excerpt.cited : undefined;
+  const plural = (n: number, noun: string) => `${n.toLocaleString("en-IN")} ${noun}${n === 1 ? "" : "s"}`;
   const context = { groupBy: explained.filters?.groupBy };
   // A list of fields beside a total ("field", "value"): label each field. A table of rows: label the columns and hide internal keys.
   const fieldList = excerpt.columns.length === 2 && excerpt.columns[0] === "field";
-  const visible = excerpt.columns.map((column, index) => ({ column, index })).filter(({ column }) => fieldList || developer || !isInternalField(column) || excerpt.highlight?.column === column);
+  // An id column whose every value has a name is shown as that name ("Hub": "Hyderabad Hub"), unless a name column is already there.
+  const nameAt = excerpt.columns.indexOf("name");
+  const named = (column: string, index: number) => /.Id$/.test(column) && !excerpt.columns.includes(`${column.slice(0, -2)}Name`)
+    && excerpt.rows.every((row) => row[index] === null || (typeof row[index] === "string" && Boolean(labels[row[index] as string])))
+    // A row that is the hub itself ({ hubId, name }) already shows its name.
+    && !(nameAt >= 0 && excerpt.rows.every((row) => row[index] === null || labels[row[index] as string] === row[nameAt]));
+  const visible = excerpt.columns.map((column, index) => ({ column, index })).filter(({ column, index }) => fieldList || developer || !isInternalField(column) || named(column, index) || excerpt.highlight?.column === column);
+  const heading = (column: string, index: number) => (!developer && named(column, index) ? fieldLabel(column.slice(0, -2), context) : fieldLabel(column, context));
   return (
     <div role="tabpanel" className="ev-panel">
       {explained.definition ? (
@@ -97,13 +108,14 @@ function EvidencePanel({ item, developer }: { item: EvidenceItem; developer: boo
           <p className="ev-value" data-path={explained.path ?? ""}><mark>{show(explained.value)}</mark></p>
           <p className="ev-text">{explained.definition.text}</p>
           <p className="muted">
-            {[explained.window?.label, explained.denominator ? `of ${show(explained.denominator.value)} ${explained.denominator.label.toLowerCase()}${explained.denominator.share !== null ? ` (${(explained.denominator.share * 100).toFixed(1)}%)` : ""}` : null, explained.definition.scope?.id ? `${explained.definition.scope.type}: ${explained.definition.scope.id}` : explained.definition.scope?.type === "network" ? "whole network" : explained.definition.scope?.type]
+            {[explained.window?.label, explained.denominator ? `of ${show(explained.denominator.value)} ${explained.denominator.label.toLowerCase()}${explained.denominator.share !== null ? ` (${(explained.denominator.share * 100).toFixed(1)}%)` : ""}` : null, scopeLabel(explained.definition.scope, labels, developer)]
               .filter(Boolean).join(" · ")}
           </p>
         </header>
       ) : null}
       <dl className="ev-meta">
-        <div><dt>Company tool</dt><dd>{toolLabel(explained.tool)}</dd></div>
+        <div><dt>From</dt><dd>{sourceLabel(explained.tool)}</dd></div>
+        {developer ? <div><dt>Company tool</dt><dd><code>{explained.tool}</code> ({toolLabel(explained.tool)})</dd></div> : null}
         <div><dt>Data as of</dt><dd>{formatIstTime(explained.dataAsOf)}</dd></div>
         {developer && explained.path ? <div><dt>Read from</dt><dd><code>{explained.path}</code></dd></div> : null}
         {filters.length ? <div><dt>Looked at</dt><dd>{filters.join(" · ")}</dd></div> : null}
@@ -111,19 +123,23 @@ function EvidencePanel({ item, developer }: { item: EvidenceItem; developer: boo
       {excerpt.rows.length ? (
         <div className="ev-excerpt">
           <p className="muted">
-            {fieldList ? "The figures in this record" : `Showing ${excerpt.rows.length} of ${excerpt.total.toLocaleString("en-IN")} ${excerpt.total === 1 ? "row" : "rows"}`}
+            {fieldList
+              ? "The figures in this record"
+              : cited
+                ? `${plural(cited.count, `${cited.label} ${cited.noun}`)} first${excerpt.rows.length > cited.count ? `, then ${excerpt.rows.length - cited.count} of the other ${(excerpt.total - cited.count).toLocaleString("en-IN")}` : ""}`
+                : `Showing ${excerpt.rows.length} of ${excerpt.total.toLocaleString("en-IN")} ${excerpt.total === 1 ? "row" : "rows"}`}
             {developer ? <> · from <code>{excerpt.from}</code></> : null}
           </p>
           <table>
-            <thead><tr>{visible.map(({ column }) => <th key={column}>{fieldList ? (column === "field" ? "Figure" : "Value") : fieldLabel(column, context)}</th>)}</tr></thead>
+            <thead><tr>{visible.map(({ column, index }) => <th key={column}>{fieldList ? (column === "field" ? "Figure" : "Value") : heading(column, index)}</th>)}</tr></thead>
             <tbody>
               {excerpt.rows.map((row, rowIndex) => (
-                <tr key={rowIndex} className={excerpt.highlight?.row === rowIndex ? "is-highlighted" : undefined}>
+                <tr key={rowIndex} className={excerpt.highlight?.row === rowIndex ? "is-highlighted" : cited && rowIndex < cited.count ? "is-cited" : undefined}>
                   {visible.map(({ column, index }) => {
                     const value = row[index];
                     const hit = excerpt.highlight?.row === rowIndex && column === excerpt.highlight.column;
                     const field = fieldList ? String(row[0]) : column;
-                    const text = fieldList && column === "field" ? fieldLabel(String(value), context) : formatValue(value, field);
+                    const text = fieldList && column === "field" ? fieldLabel(String(value), context) : formatValue(value, field, labels);
                     return <td key={column} className={hit ? "ev-hit" : undefined} data-path={hit ? explained.path ?? undefined : undefined}>{text}</td>;
                   })}
                 </tr>
