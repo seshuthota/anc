@@ -344,6 +344,17 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
   if (!store.rememberAction(action.actionId, threadId, new Date().toISOString())) {
     return current;
   }
+  try {
+    return await dispatchAction(action, threadId, principal, current, raw, operation);
+  } catch (error) {
+    // A refusal (stale surface, an operation that cannot go ahead) did nothing, so the
+    // action id is not spent: a retry with the same id is handled, not silently dropped.
+    store.forgetAction(action.actionId, threadId);
+    throw error;
+  }
+}
+
+async function dispatchAction(action: SemanticAction, threadId: string, principal: Principal, current: PublicState, raw: Record<string, unknown>, operation: boolean): Promise<PublicState> {
   if (action.name === "back_to_briefing") {
     // R5: "Back" on a drill-down's context header restores the briefing revision it came from.
     return restoreSurface(threadId, String(action.parameters.surfaceId ?? ""), Number(action.parameters.revision ?? 0), principal.id);
@@ -351,7 +362,10 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
   if (current.surface && (action.surfaceId !== current.surface.surfaceId || action.surfaceRevision !== current.surface.revision)) {
     // A briefing operation clicked on an older revision (a double click, a second
     // tab) is a no-op: each is idempotent by proposal, and nothing is written.
-    if (operation) return current;
+    if (operation) {
+      store.forgetAction(action.actionId, threadId);
+      return current;
+    }
     throw new Error("stale surface action");
   }
   if (action.name === "propose_action") {

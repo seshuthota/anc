@@ -199,6 +199,27 @@ describe("agent HTTP", () => {
       expect(opened.evidence.evidenceId).toBe(ids[0]);
     });
 
+    it("a refused action id is not spent: retrying the same id once it is valid is handled", async () => {
+      const actionId = `act-retry-${Date.now()}`;
+      const send = (revision: number) => fetch(`${base}/runtime/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...as("user-coo") },
+        body: JSON.stringify({ actionId, name: "show_evidence", surfaceId: state.surface.surfaceId, surfaceRevision: revision, parameters: { evidenceIds: state.surface.dataModel.briefing.primary.evidenceIds } }),
+      });
+      // An old revision: refused with 409.
+      const refused = await send(state.surface.revision + 99);
+      expect(refused.status).toBe(409);
+      // The same id on the current revision does its work instead of silently returning.
+      const retried = await send(state.surface.revision);
+      expect(retried.status).toBe(200);
+      const opened = await retried.json() as { evidenceList?: unknown[] };
+      expect(opened.evidenceList?.length).toBeGreaterThan(0);
+      // Once handled, the same id is a no-op.
+      const duplicate = await send(state.surface.revision);
+      expect(duplicate.status).toBe(200);
+      expect((await duplicate.json() as { evidenceList?: unknown[] }).evidenceList).toBeUndefined();
+    });
+
     it("refuses a forged briefing operation with a 403 and writes nothing (P4)", async () => {
       const post = (principalId: string, body: Record<string, unknown>) => fetch(`${base}/runtime/actions`, {
         method: "POST",

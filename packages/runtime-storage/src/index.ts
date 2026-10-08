@@ -274,6 +274,11 @@ export class RuntimeStore {
     return result.changes > 0;
   }
 
+  /** Un-marks an action that was refused or did nothing, so a retry with the same id is handled. */
+  forgetAction(actionId: string, threadId: string): void {
+    this.db.prepare("DELETE FROM handled_actions WHERE action_id = ? AND thread_id = ?").run(actionId, threadId);
+  }
+
   setThreadState(input: {
     threadId: string;
     investigationId?: string;
