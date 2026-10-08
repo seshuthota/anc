@@ -467,7 +467,7 @@ export default function HomePage() {
           ) : null}
         </div>
       )}
-      {evidence ? <EvidenceDrawer key={evidence.items.map((item) => item.evidenceId).join("|")} state={evidence} onClose={() => setEvidence(null)} /> : null}
+      {evidence ? <EvidenceDrawer key={evidence.items.map((item) => item.evidenceId).join("|")} state={evidence} developer={developer} onClose={() => setEvidence(null)} /> : null}
     </main>
   );
 }
