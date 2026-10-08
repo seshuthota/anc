@@ -17,6 +17,22 @@ describe("runtime store", () => {
     store.close();
   });
 
+  it("keeps a proposal's created_at and owner when its status changes", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "anc-runtime-")), "runtime.sqlite");
+    const store = new RuntimeStore(openRuntimeDatabase(path));
+    const proposal = { id: "prop-1", threadId: "t", ownerId: "user-coo", capability: "cap.equipment.escalate", revision: 3, payload: { actionId: "escalate_equipment_fault" }, expiresAt: "2026-09-21T01:45:00.000Z" };
+    store.saveProposal({ ...proposal, status: "prepared", now: "2026-09-21T01:30:00.000Z" });
+    store.saveProposal({ ...proposal, status: "committed", now: "2026-09-21T01:40:00.000Z" });
+    // Someone else's save under the same id changes nothing.
+    store.saveProposal({ ...proposal, ownerId: "user-hub-hyd", status: "cancelled", now: "2026-09-21T01:41:00.000Z" });
+    expect(store.getProposal("prop-1", "user-coo")?.status).toBe("committed");
+    expect(store.getProposal("prop-1", "user-hub-hyd")).toBeUndefined();
+    store.close();
+    const db = new Database(path, { readonly: true });
+    expect(db.prepare("SELECT created_at, owner_id FROM action_proposals WHERE id = 'prop-1'").get()).toEqual({ created_at: "2026-09-21T01:30:00.000Z", owner_id: "user-coo" });
+    db.close();
+  });
+
   it("keeps one evidence row per owner when two people get the same evidence id", () => {
     const path = join(mkdtempSync(join(tmpdir(), "anc-ev-owner-")), "runtime.sqlite");
     const store = new RuntimeStore(openRuntimeDatabase(path));

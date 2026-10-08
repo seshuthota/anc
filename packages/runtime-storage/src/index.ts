@@ -368,8 +368,13 @@ export class RuntimeStore {
 
   saveProposal(input: { id: string; threadId: string; ownerId: string; capability: string; revision: number; payload: unknown; expiresAt: string; status: string; now: string }) {
     this.db.prepare(
-      `INSERT OR REPLACE INTO action_proposals (id, thread_id, owner_id, capability, revision, payload, expires_at, status, created_at)
-       VALUES (@id, @threadId, @ownerId, @capability, @revision, @payload, @expiresAt, @status, @now)`,
+      // A status change (prepared → committed / expired / cancelled) updates the row in
+      // place: created_at stays when the proposal was made, and its owner never changes.
+      `INSERT INTO action_proposals (id, thread_id, owner_id, capability, revision, payload, expires_at, status, created_at)
+       VALUES (@id, @threadId, @ownerId, @capability, @revision, @payload, @expiresAt, @status, @now)
+       ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id, capability = excluded.capability, revision = excluded.revision,
+         payload = excluded.payload, expires_at = excluded.expires_at, status = excluded.status
+       WHERE action_proposals.owner_id = excluded.owner_id`,
     ).run({ ...input, payload: JSON.stringify(input.payload) });
   }
 
