@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { A2UIWorkspace, type A2UIMessage } from "../lib/a2ui";
 import { EvidenceDrawer, type EvidenceDrawerState, type EvidenceExplanation, type EvidenceItem } from "../lib/EvidenceDrawer";
 import { ActivityPill } from "../lib/ActivityPill";
+import { ACTION_FAILED, REQUEST_FAILED } from "../lib/activity-text";
 import {
   activityKindLabel,
   agentUrl,
@@ -21,6 +22,15 @@ import {
 const RUN_START = "Looking into your question";
 /** Asked on the person's behalf when they open the workspace, so they start from what needs attention. */
 const BRIEFING = "Brief me: what needs my attention this morning?";
+/**
+ * A failed request or action, in fixed wording. The raw error (an exception
+ * message, a validation error) is only appended for developers (?dev=1).
+ */
+function failureLine(fixed: string, raw: unknown): string {
+  const detail = raw instanceof Error ? raw.message : typeof raw === "string" ? raw : "";
+  const developer = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("dev") === "1";
+  return developer && detail ? `${fixed} (${detail})` : fixed;
+}
 const briefedKey = (id: string) => `democo-briefed:${id}`;
 
 export default function HomePage() {
@@ -80,7 +90,7 @@ export default function HomePage() {
         status: "failed",
         activity: [{
           id: crypto.randomUUID(),
-          message: event.message ?? "This request failed.",
+          message: failureLine(REQUEST_FAILED, event.message),
           kind: "status",
           timestamp: new Date().toISOString(),
         }, ...current.activity],
@@ -173,7 +183,7 @@ export default function HomePage() {
       setState((current) => ({
         ...current,
         status: "failed",
-        activity: [{ id: crypto.randomUUID(), message: error instanceof Error ? error.message : "This request failed.", kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
+        activity: [{ id: crypto.randomUUID(), message: failureLine(REQUEST_FAILED, error), kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
       }));
     } finally {
       if (currentRunId.current === runId) setBusy(false);
@@ -249,7 +259,7 @@ export default function HomePage() {
       if (currentRunId.current !== runId) return;
       setState((current) => ({
         ...current,
-        activity: [{ id: crypto.randomUUID(), message: error instanceof Error ? error.message : "This action is no longer valid.", kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
+        activity: [{ id: crypto.randomUUID(), message: failureLine(ACTION_FAILED, error), kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
       }));
     } finally {
       if (currentRunId.current === runId) setBusy(false);
