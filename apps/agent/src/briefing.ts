@@ -1,5 +1,5 @@
 import { getMetricDefinition, type AgentFinding, type Domain, type PresentationBriefing } from "@anc/contracts";
-import { chainHopRepeatsHeadline, type BriefingPlan } from "./rank.js";
+import { chainHopRepeatsHeadline, restatesFigure, type BriefingPlan } from "./rank.js";
 import type { ReconcileResult, ReconciledMetric } from "./reconcile.js";
 import type { Synthesis } from "./synthesis.js";
 import { DEMO_CLOCK } from "./windows.js";
@@ -96,7 +96,8 @@ export function buildBriefing(input: {
         evidenceIds: metric.evidenceIds,
         resultPath: metric.resultPaths[0] ?? "",
       } : undefined,
-      whyItMatters: analyst?.whyItMatters || plan.primary.whyItMatters,
+      // The analyst's line stands unless it only restates the figure's definition or the headline.
+      whyItMatters: analyst?.whyItMatters && !restatesFigure(analyst.whyItMatters, [metric?.definition, headline]) ? analyst.whyItMatters : plan.primary.whyItMatters,
       chain,
       confidence: analyst?.confidence ?? plan.primary.confidence,
       evidenceIds,

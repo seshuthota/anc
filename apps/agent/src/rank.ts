@@ -227,7 +227,7 @@ export function rankBriefing(input: {
     primary: {
       findingId: primaryId,
       metric: primaryPick.metric,
-      whyItMatters: primaryPick.finding.summary,
+      whyItMatters: whyItMatters(primaryPick.finding, primaryPick.metric),
       confidence: primaryPick.metric && serious(primaryPick.finding) ? "high" : "medium",
       chain: trimmed,
     },
@@ -235,6 +235,53 @@ export function rankBriefing(input: {
     quiet: false,
     actions,
   };
+}
+
+/**
+ * What the primary figure means for the business, per metric: the consequence,
+ * not a restatement of the figure's definition. No figures, so nothing here can
+ * bring an unreconciled number onto the card.
+ */
+const CONSEQUENCE: Record<string, string> = {
+  parcels_at_risk_today: "Each one that misses today's trucks becomes a late delivery, a likely complaint and a miss against shipper on-time commitments.",
+  parcels_waiting_to_sort: "Until the backlog clears, parcels miss their linehaul and route-run departures and slip to tomorrow.",
+  route_runs_held_today: "A held run leaves its parcels at the depot: every one is a promised delivery that will not arrive today.",
+  complaints_open_unassigned: "Nobody is answering these customers yet; late complaints left without an owner turn into escalations.",
+  parcels_left_behind_today: "These parcels miss today's promise and need rebooking on tomorrow's runs.",
+  hub_sort_rate_last_hour: "At this rate the hub cannot clear its backlog before the next departures.",
+  shipper_projected_on_time_rate: "Falling below the commitment puts the account's contract terms at risk.",
+  locker_inbound_without_space: "Parcels that arrive with nowhere to go are turned away and travel back to the depot.",
+};
+
+const STOP = new Set(["a", "an", "and", "the", "of", "for", "to", "on", "in", "at", "is", "are", "be", "not", "yet", "with", "by", "per", "its", "it", "this", "that", "today"]);
+const words = (text: string) => new Set(text.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter((word) => word.length > 1 && !STOP.has(word)));
+
+/**
+ * True when a "why it matters" line mostly restates the figure's definition or the
+ * headline (most of its words already appear there), so it adds nothing.
+ */
+export function restatesFigure(text: string, against: Array<string | undefined>): boolean {
+  const own = words(text);
+  if (!own.size) return true;
+  return against.some((other) => {
+    if (!other) return false;
+    const theirs = words(other);
+    const shared = [...own].filter((word) => theirs.has(word)).length;
+    return shared / own.size >= 0.6;
+  });
+}
+
+/**
+ * The consequence for the business. The finding's summary stands when it adds
+ * something and carries no figure other than the headline's own (other figures
+ * are not on the reconciled headline list); otherwise the metric's consequence.
+ */
+export function whyItMatters(finding: AgentFinding, metric?: ReconciledMetric): string {
+  const consequence = metric ? CONSEQUENCE[metric.metricId] : undefined;
+  const own = metric ? figureTokens(String(metric.value)) : [];
+  const strayFigures = figureTokens(finding.summary).some((figure) => !own.includes(figure));
+  if (!restatesFigure(finding.summary, [metric?.definition, finding.title]) && !(metric && strayFigures)) return finding.summary;
+  return consequence ?? finding.summary;
 }
 
 /** Numeric tokens in a text, normalized so "4,000", "4000" and "4000.0" compare equal. Clock times are skipped. */

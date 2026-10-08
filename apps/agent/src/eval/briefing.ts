@@ -63,6 +63,7 @@ process.env.LOGISTICS_DB_PATH = seeded["hub-fault"];
 const { runInvestigation, handleAction, publicState, store } = await import("../runtime.js");
 const { reconcileMetrics, headlineMetrics, scopeKey } = await import("../reconcile.js");
 const { figureGate } = await import("../synthesis.js");
+const { restatesFigure } = await import("../rank.js");
 const { useSynthesisModel } = await import("../synthesis.js");
 const { useComposerModel } = await import("../ui-composer.js");
 const { synthesisReplay, composerReplay } = await import("./replay.js");
@@ -78,7 +79,7 @@ type Check = { name: string; ok: boolean; detail?: string };
 type Cell = { scenario: Scenario; persona: string; variant: string; repeat: number; title: string; checks: Check[] };
 type Component = { id?: string; component?: string; child?: string; children?: string[]; action?: { event?: { name?: string; context?: Record<string, unknown> } } } & Record<string, unknown>;
 type Briefing = {
-  primary?: { findingId: string; headline: string; whyItMatters: string; evidenceIds: string[]; metric?: { metricId: string; value: string; evidenceIds: string[] }; chain: Array<{ text: string; evidenceIds: string[]; findingIds?: string[] }> };
+  primary?: { findingId: string; headline: string; whyItMatters: string; evidenceIds: string[]; metric?: { metricId: string; value: string; evidenceIds: string[]; definition?: string }; chain: Array<{ text: string; evidenceIds: string[]; findingIds?: string[] }> };
   secondary: Record<string, { id: string; title: string; evidenceIds: string[]; metricId?: string; resultPath?: string; question?: string }>;
   actions: Array<{ id: string; name: string }>;
 };
@@ -162,6 +163,8 @@ function checkSurface(scenario: Scenario, personaId: string, state: ReturnType<t
   check("R3 0 free Stat tiles", ofType("Stat").length === 0, `found ${ofType("Stat").length}`);
   check("R3 0 free Cards", ofType("Card").length === 0, `found ${ofType("Card").length}`);
   check("R3 0 Sequence outside the primary", ofType("Sequence").length === 0, `found ${ofType("Sequence").length}`);
+  // "Why it matters" says the consequence, not the figure's definition or the headline again.
+  if (briefing?.primary) check("R1 why-it-matters does not restate the figure", !restatesFigure(briefing.primary.whyItMatters, [briefing.primary.metric?.definition, briefing.primary.headline]), briefing.primary.whyItMatters);
   // Each finding shows once: nothing the chain cites is repeated under the lower-priority items.
   if (briefing?.primary) {
     const chain = briefing.primary.chain;

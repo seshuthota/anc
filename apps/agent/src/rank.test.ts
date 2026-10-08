@@ -165,3 +165,23 @@ describe("each finding shows once on the card (pre-demo review)", () => {
     expect(cited.secondary.map((entry) => entry.id)).not.toContain("f-ship");
   });
 });
+
+describe("why it matters (live check)", () => {
+  it("says the consequence instead of restating the figure's definition", async () => {
+    const { restatesFigure, whyItMatters } = await import("./rank.js");
+    const findings = load("hub-fault-findings");
+    const reconciled = reconcileMetrics(findings);
+    const plan = rankBriefing({ findings, reconciled, principal: PERSONAS.find((persona) => persona.id === "user-coo")! });
+    const metric = plan.primary!.metric!;
+    expect(restatesFigure("Promised for delivery today and not yet on a truck, of 4,000 promised.", [metric.definition])).toBe(true);
+    expect(restatesFigure(plan.primary!.whyItMatters, [metric.definition, findings.find((finding) => finding.findingId === plan.primary!.findingId)!.title])).toBe(false);
+    expect(plan.primary!.whyItMatters).toMatch(/late delivery/);
+    const backlogMetric = { ...metric, metricId: "parcels_waiting_to_sort", value: 595, definition: "Parcels at the hub not yet sorted" };
+    // A summary carrying figures that are not the headline's own is replaced by the consequence.
+    const backlog = { ...findings[0]!, title: "Hyderabad Hub has 595 parcels waiting to sort", summary: "Sorted 30 in the last hour against a usual 163 per hour." };
+    expect(whyItMatters(backlog, backlogMetric)).toMatch(/linehaul/);
+    // A summary that adds something and carries no stray figure stands.
+    const plain = { ...backlog, summary: "Manual sorting cannot keep up with the morning linehaul arrivals." };
+    expect(whyItMatters(plain, backlogMetric)).toBe(plain.summary);
+  });
+});
