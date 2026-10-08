@@ -17,7 +17,7 @@ import { composeSurface } from "./ui-composer.js";
 import { withContextHeader } from "./composer.js";
 import { runSpecialist, specialistLabel } from "./specialists/index.js";
 import { CURRENT, TIMEZONE } from "./windows.js";
-import { completedBriefingActions } from "./operations.js";
+import { completedBriefingActions, completedEscalations } from "./operations.js";
 
 export type GraphState = {
   objective: string;
@@ -364,7 +364,14 @@ async function synthesizeNode(state: typeof State.State): Promise<Partial<GraphS
   const findings = Object.values(state.findings);
   const reconciled = state.reconciled ?? reconcileMetrics(findings);
   const audience = `${ctx.principal.title}. ${ctx.principal.preferences.roleDescription} Cares about: ${ctx.principal.preferences.priorities.join(", ")}.`;
-  const completedActions = await completedBriefingActions(ctx.store, ctx.principal, findings, state.runId);
+  // Done operations are not offered again. Escalations come from this run's
+  // evidence; notify / assign need a lookup, so the plan is ranked first and
+  // only the notify / assign actions it actually offers (for the card's own
+  // shipper) are checked. The catalog picks the card's shipper whether or not
+  // it was notified, so ranking again with the result cannot surface another.
+  const escalated = completedEscalations(ctx.store, ctx.principal, findings);
+  const draft = rankBriefing({ findings, reconciled, principal: ctx.principal, completedActions: escalated });
+  const completedActions = await completedBriefingActions(ctx.store, ctx.principal, draft.primary ? draft.actions : [], state.runId, escalated);
   const outcome = await synthesize({ objective: state.objective, audience, findings, runId: state.runId, reconciled, principal: ctx.principal, completedActions });
   if (outcome.reason && outcome.synthesis) {
     ctx.emit("Lead Analyst ranking was replaced by the deterministic ranker", "status");

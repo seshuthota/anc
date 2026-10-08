@@ -406,25 +406,34 @@ async function prepareBriefingAction(store: RuntimeStore, principal: Principal, 
 }
 
 /**
- * Operations already done, so the briefing does not offer them again, as
- * `<actionId>:<recordId>` pairs:
- * - an escalated equipment fault, from the evidence behind this run's findings
- *   (content-addressed per owner, so looked up by id rather than by run);
- * - a shipper whose delay notice is already queued (get_shipper.queuedNotifications);
- * - late at-risk complaints when none is left without an owner (list_complaints).
- * The last two are read-only lookups, made only for actions this person may take.
- * A lookup that fails leaves the action offered: propose re-checks it anyway.
+ * Escalations already done, as `escalate_equipment_fault:<eventId>` pairs, read
+ * from the evidence behind this run's findings (content-addressed per owner, so
+ * looked up by id rather than by run). No lookup is made.
  */
-export async function completedBriefingActions(store: RuntimeStore, principal: Principal, findings: AgentFinding[], runId: string): Promise<Set<string>> {
+export function completedEscalations(store: RuntimeStore, principal: Principal, findings: AgentFinding[]): Set<string> {
   const done = new Set<string>();
   const ids = new Set(findings.flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds)).filter((id) => id.startsWith("list_equipment_events-")));
   for (const id of ids) {
     for (const row of rowsOf(store.getEvidence(id, principal.id) ?? {})) if (row.escalatedAt) done.add(`escalate_equipment_fault:${String(row.id)}`);
   }
-  const shippers = hasGrant(principal, "cap.shippers.notify")
-    ? [...new Set(findings.flatMap((finding) => finding.entities.filter((entity) => entity.type === "shipper").map((entity) => entity.id)))].slice(0, 3)
-    : [];
-  const complaints = hasGrant(principal, "cap.complaints.assign");
+  return done;
+}
+
+/**
+ * Which of a briefing's planned notify / assign actions are already done, so
+ * they are not offered again, as `<actionId>:<recordId>` pairs added to `done`:
+ * - the card's shipper, when its delay notice is already queued (get_shipper.queuedNotifications);
+ * - late at-risk complaints, when none is left without an owner (list_complaints).
+ * Read-only lookups, made only for the actions the plan actually offers (the
+ * catalog offered them only because this person holds the grant), and only for
+ * the shipper on that card. A plan with neither makes no lookup at all. A lookup
+ * that fails leaves the action offered: propose re-checks it anyway.
+ */
+export async function completedBriefingActions(store: RuntimeStore, principal: Principal, planned: ReadonlyArray<{ id: string; entities?: ReadonlyArray<{ type: string; id: string }> }>, runId: string, done: Set<string> = new Set()): Promise<Set<string>> {
+  const shippers = [...new Set(planned
+    .filter((action) => action.id === "notify_shipper" && hasGrant(principal, "cap.shippers.notify"))
+    .flatMap((action) => (action.entities ?? []).filter((entity) => entity.type === "shipper").map((entity) => entity.id)))];
+  const complaints = planned.some((action) => action.id === "assign_complaints") && hasGrant(principal, "cap.complaints.assign");
   if (!shippers.length && !complaints) return done;
   try {
     await readOnly(store, principal, `done-${runId}`, async (client) => {
