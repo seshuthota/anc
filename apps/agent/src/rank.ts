@@ -186,10 +186,6 @@ export function rankBriefing(input: {
   }
 
   const primaryId = primaryPick.finding.findingId;
-  const secondary = ranked
-    .filter((item) => item.finding.findingId !== primaryId)
-    .slice(0, 3)
-    .map((item) => ({ findingId: item.finding.findingId, title: item.finding.title }));
 
   // The chain starts at the first cause, not at the headline: the primary card
   // already states the headline and its one figure, so a hop that repeats it
@@ -213,6 +209,12 @@ export function rankBriefing(input: {
   const kept = chain.filter((hop) => !chainHopRepeatsHeadline(hop.text, headline));
   const trimmed = kept.length > 3 ? [...kept.slice(0, 2), kept[kept.length - 1]!] : kept;
   const onCard = new Set(trimmed.flatMap((hop) => hop.findingIds));
+  // Lower-priority items are what the card does not already say: never the
+  // primary, and never a finding its cause chain cites (each item shows once).
+  const secondary = ranked
+    .filter((item) => item.finding.findingId !== primaryId && !onCard.has(item.finding.findingId))
+    .slice(0, 3)
+    .map((item) => ({ findingId: item.finding.findingId, title: item.finding.title }));
   const actions = selectBriefingActions({
     primary: primaryPick.finding,
     related: findings.filter((finding) => onCard.has(finding.findingId) && finding.findingId !== primaryId),

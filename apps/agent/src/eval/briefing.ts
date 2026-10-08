@@ -78,8 +78,8 @@ type Check = { name: string; ok: boolean; detail?: string };
 type Cell = { scenario: Scenario; persona: string; variant: string; repeat: number; title: string; checks: Check[] };
 type Component = { id?: string; component?: string; child?: string; children?: string[]; action?: { event?: { name?: string; context?: Record<string, unknown> } } } & Record<string, unknown>;
 type Briefing = {
-  primary?: { findingId: string; headline: string; whyItMatters: string; evidenceIds: string[]; metric?: { metricId: string; value: string; evidenceIds: string[] }; chain: Array<{ evidenceIds: string[] }> };
-  secondary: Record<string, { id: string; title: string; evidenceIds: string[]; metricId?: string; resultPath?: string }>;
+  primary?: { findingId: string; headline: string; whyItMatters: string; evidenceIds: string[]; metric?: { metricId: string; value: string; evidenceIds: string[] }; chain: Array<{ text: string; evidenceIds: string[]; findingIds?: string[] }> };
+  secondary: Record<string, { id: string; title: string; evidenceIds: string[]; metricId?: string; resultPath?: string; question?: string }>;
   actions: Array<{ id: string; name: string }>;
 };
 
@@ -105,8 +105,17 @@ function boundPaths(value: unknown, found: string[] = []): string[] {
   return found;
 }
 
+/** The figure each persona's hub-fault briefing must lead with (pinned, so a re-rank cannot slip by). */
+const EXPECT_PRIMARY_METRIC: Record<string, string> = {
+  "user-coo": "parcels_at_risk_today",
+  "user-accounts": "parcels_at_risk_today",
+  "user-hub-hyd": "parcels_waiting_to_sort",
+  "user-lastmile": "route_runs_held_today",
+  "user-care": "complaints_open_unassigned",
+};
+
 /** The R1–R4 invariants on one briefing surface. */
-function checkSurface(scenario: Scenario, state: ReturnType<typeof publicState>, findings: AgentFinding[]): Check[] {
+function checkSurface(scenario: Scenario, personaId: string, state: ReturnType<typeof publicState>, findings: AgentFinding[]): Check[] {
   const checks: Check[] = [];
   const check = (name: string, ok: boolean, detail?: string) => checks.push({ name, ok, ...(ok || !detail ? {} : { detail }) });
   const components = componentsOf(state);
@@ -138,6 +147,10 @@ function checkSurface(scenario: Scenario, state: ReturnType<typeof publicState>,
   check(`R1 ${EXPECT_PRIMARY[scenario]} PrimaryFinding`, primaries === EXPECT_PRIMARY[scenario], `found ${primaries}`);
   check("R1 primary in the plan matches the surface", Boolean(briefing?.primary) === (primaries === 1));
   if (scenario === "hub-fault") check("R1 title is not the calm line on the fault day", !/^Nothing needs your attention/.test(data.title ?? ""), data.title);
+  if (scenario === "hub-fault" && EXPECT_PRIMARY_METRIC[personaId]) {
+    const got = briefing?.primary?.metric?.metricId;
+    check(`R1 primary figure is ${EXPECT_PRIMARY_METRIC[personaId]}`, got === EXPECT_PRIMARY_METRIC[personaId], `got ${got ?? "none"}`);
+  }
 
   // R3: the budget.
   const secondary = Object.values(briefing?.secondary ?? {});
@@ -149,6 +162,17 @@ function checkSurface(scenario: Scenario, state: ReturnType<typeof publicState>,
   check("R3 0 free Stat tiles", ofType("Stat").length === 0, `found ${ofType("Stat").length}`);
   check("R3 0 free Cards", ofType("Card").length === 0, `found ${ofType("Card").length}`);
   check("R3 0 Sequence outside the primary", ofType("Sequence").length === 0, `found ${ofType("Sequence").length}`);
+  // Each finding shows once: nothing the chain cites is repeated under the lower-priority items.
+  if (briefing?.primary) {
+    const chain = briefing.primary.chain;
+    check("R3 every chain hop names the findings it cites", chain.every((hop) => Boolean(hop.findingIds?.length)), "a hop without findingIds");
+    const onCard = new Set([briefing.primary.findingId, ...chain.flatMap((hop) => hop.findingIds ?? [])]);
+    const repeated = secondary.filter((item) => onCard.has(item.id) || chain.some((hop) => hop.text === item.title));
+    check("R3 no finding in both the chain and the lower-priority items", !repeated.length, repeated.map((item) => item.title).join(" | "));
+  }
+  // A lower-priority item's drill asks about what the row says (its scoped title), not the raw finding title.
+  const offQuestion = secondary.filter((item) => item.question !== undefined && item.question !== `Look into: ${item.title}`);
+  check("R5 each lower-priority drill asks about the row's own title", !offQuestion.length, offQuestion.map((item) => item.question).join(" | "));
   if (!briefing?.primary) check("R6 no actions without a primary", actionButtons.filter((button) => button.action?.event?.name === "propose_action").length === 0);
 
   // R4: every figure on screen carries its evidence.
@@ -229,7 +253,7 @@ for (const scenario of scenarios) {
           const state = await runInvestigation({ question: BRIEF, threadId, principal });
           title = state.surface?.title ?? "";
           const findings = store.listFindings(state.runId!) as AgentFinding[];
-          checks = [{ name: "run completed", ok: state.status === "completed", ...(state.status === "completed" ? {} : { detail: state.status }) }, ...checkSurface(scenario, state, findings)];
+          checks = [{ name: "run completed", ok: state.status === "completed", ...(state.status === "completed" ? {} : { detail: state.status }) }, ...checkSurface(scenario, personaId, state, findings)];
           const substituted = peekSubstitutions(state.runId!).map((item) => item.specialist);
           const briefing = (state.surface?.dataModel as { briefing?: Briefing }).briefing;
           if (variant === "replay") {

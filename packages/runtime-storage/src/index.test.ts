@@ -17,14 +17,14 @@ describe("runtime store", () => {
     store.close();
   });
 
-  it("keeps a proposal's created_at and owner when its status changes", () => {
+  it("keeps a proposal's created_at and owner when its status changes, and refuses another owner", () => {
     const path = join(mkdtempSync(join(tmpdir(), "anc-runtime-")), "runtime.sqlite");
     const store = new RuntimeStore(openRuntimeDatabase(path));
     const proposal = { id: "prop-1", threadId: "t", ownerId: "user-coo", capability: "cap.equipment.escalate", revision: 3, payload: { actionId: "escalate_equipment_fault" }, expiresAt: "2026-09-21T01:45:00.000Z" };
     store.saveProposal({ ...proposal, status: "prepared", now: "2026-09-21T01:30:00.000Z" });
     store.saveProposal({ ...proposal, status: "committed", now: "2026-09-21T01:40:00.000Z" });
-    // Someone else's save under the same id changes nothing.
-    store.saveProposal({ ...proposal, ownerId: "user-hub-hyd", status: "cancelled", now: "2026-09-21T01:41:00.000Z" });
+    // Someone else's save under the same id is refused and changes nothing.
+    expect(() => store.saveProposal({ ...proposal, ownerId: "user-hub-hyd", status: "cancelled", now: "2026-09-21T01:41:00.000Z" })).toThrow(/belongs to another owner/);
     expect(store.getProposal("prop-1", "user-coo")?.status).toBe("committed");
     expect(store.getProposal("prop-1", "user-hub-hyd")).toBeUndefined();
     store.close();

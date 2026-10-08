@@ -367,7 +367,7 @@ export class RuntimeStore {
   }
 
   saveProposal(input: { id: string; threadId: string; ownerId: string; capability: string; revision: number; payload: unknown; expiresAt: string; status: string; now: string }) {
-    this.db.prepare(
+    const result = this.db.prepare(
       // A status change (prepared → committed / expired / cancelled) updates the row in
       // place: created_at stays when the proposal was made, and its owner never changes.
       `INSERT INTO action_proposals (id, thread_id, owner_id, capability, revision, payload, expires_at, status, created_at)
@@ -376,6 +376,8 @@ export class RuntimeStore {
          payload = excluded.payload, expires_at = excluded.expires_at, status = excluded.status
        WHERE action_proposals.owner_id = excluded.owner_id`,
     ).run({ ...input, payload: JSON.stringify(input.payload) });
+    // No row written means the id exists under another owner: refuse loudly, never a silent no-op.
+    if (result.changes !== 1) throw new Error(`Proposal ${input.id} belongs to another owner; not saved`);
   }
 
   getProposal(id: string, ownerId: string) {

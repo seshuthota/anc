@@ -81,7 +81,7 @@ export function buildBriefing(input: {
     const headline = analyst?.headline ?? primaryFinding.title;
     // Chain rule, enforced again where the composer's data is built: no hop repeats
     // the headline or carries its figure, whoever wrote the chain.
-    const chain = chainSource.filter((hop) => !chainHopRepeatsHeadline(hop.text, { text: headline, figure: metric?.value })).slice(0, 3).map((hop) => ({ text: hop.text, kind: hop.kind, evidenceIds: evidenceOf(findings, hop.findingIds) }));
+    const chain = chainSource.filter((hop) => !chainHopRepeatsHeadline(hop.text, { text: headline, figure: metric?.value })).slice(0, 3).map((hop) => ({ text: hop.text, kind: hop.kind, evidenceIds: evidenceOf(findings, hop.findingIds), findingIds: [...hop.findingIds] }));
     const evidenceIds = [...new Set([...(metric?.evidenceIds ?? []), ...evidenceOf(findings, [primaryFinding.findingId]), ...chain.flatMap((hop) => hop.evidenceIds)])];
     primary = {
       findingId: primaryFinding.findingId,
@@ -104,19 +104,24 @@ export function buildBriefing(input: {
     if (primary.metric && !primary.metric.resultPath) primary.metric = undefined;
   }
 
-  const secondary = plan.secondary.slice(0, 3).flatMap((item) => {
+  // Each finding shows once: an item the card's chain already cites (whoever wrote
+  // the chain) is not repeated under the lower-priority items.
+  const onCard = new Set(primary?.chain.flatMap((hop) => hop.findingIds ?? []) ?? []);
+  const secondary = plan.secondary.filter((item) => !onCard.has(item.findingId)).slice(0, 3).flatMap((item) => {
     const finding = byId.get(item.findingId);
     if (!finding) return [];
     const evidenceIds = evidenceOf(findings, [finding.findingId]);
     if (!evidenceIds.length) return [];
     const bound = finding.claims.flatMap((claim) => claim.metrics).find((metric) => metric.metricId && metric.resultPath);
+    // The drill asks about what the row says (the scoped title, e.g. "of the 905"), not the finding's raw title.
+    const title = scopedTitle(finding, plan.primary?.metric, reconciled) ?? finding.title;
     return [{
       id: finding.findingId,
-      title: scopedTitle(finding, plan.primary?.metric, reconciled) ?? finding.title,
+      title,
       evidenceIds,
       ...(bound?.metricId ? { metricId: bound.metricId } : {}),
       ...(bound?.resultPath ? { resultPath: bound.resultPath } : {}),
-      question: `Look into: ${finding.title}`,
+      question: `Look into: ${title}`,
     }];
   });
 

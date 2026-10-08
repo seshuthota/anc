@@ -133,3 +133,33 @@ describe("determinism", () => {
     }
   });
 });
+
+describe("each finding shows once on the card (pre-demo review)", () => {
+  it("never lists a finding the chain cites as a lower-priority item, for any persona", () => {
+    const findings = load("hub-fault-findings");
+    const reconciled = reconcileMetrics(findings);
+    for (const principal of PERSONAS) {
+      const plan = rankBriefing({ findings, reconciled, principal });
+      if (!plan.primary) continue;
+      const onCard = new Set([plan.primary.findingId, ...plan.primary.chain.flatMap((hop) => hop.findingIds)]);
+      expect(plan.secondary.filter((item) => onCard.has(item.findingId)), principal.id).toEqual([]);
+    }
+  });
+
+  it("drops a chain-cited item from the briefing even when the chain came from elsewhere, and drills on the scoped title", async () => {
+    const { buildBriefing } = await import("./briefing.js");
+    const findings = load("scope-905-vs-218");
+    const reconciled = reconcileMetrics(findings);
+    const plan = rankBriefing({ findings, reconciled });
+    expect(plan.primary?.findingId).toBe("f-net");
+    // Godavari offered as a lower-priority item with nothing on the chain: scoped title, drill asks about it.
+    const loose = buildBriefing({ plan: { ...plan, primary: { ...plan.primary!, chain: [] }, secondary: [{ findingId: "f-ship", title: "raw" }] }, findings, checkedDomains: [], reconciled });
+    const item = loose.secondary.find((entry) => entry.id === "f-ship")!;
+    expect(item.title).toMatch(/of the 905/);
+    expect(item.question).toBe(`Look into: ${item.title}`);
+    // The same finding cited by the chain is not repeated below it.
+    const cited = buildBriefing({ plan: { ...plan, primary: { ...plan.primary!, chain: [{ text: "Godavari Organics", kind: "inferred", findingIds: ["f-ship"] }] }, secondary: [{ findingId: "f-ship", title: "raw" }] }, findings, checkedDomains: [], reconciled });
+    expect(cited.primary?.chain[0]?.findingIds).toEqual(["f-ship"]);
+    expect(cited.secondary.map((entry) => entry.id)).not.toContain("f-ship");
+  });
+});

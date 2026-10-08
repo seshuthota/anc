@@ -149,7 +149,9 @@ export const PresentationBriefingPrimarySchema = z.object({
   chain: z.array(z.object({
     text: z.string().min(1),
     kind: z.enum(["observed", "inferred"]),
-    evidenceIds: BriefingEvidenceSchema
+    evidenceIds: BriefingEvidenceSchema,
+    /** The findings this hop cites; none of them is repeated as a lower-priority item. */
+    findingIds: z.array(z.string().min(1)).optional()
   })).max(3),
   confidence: z.enum(["high", "medium", "low"]),
   evidenceIds: BriefingEvidenceSchema.min(1),
