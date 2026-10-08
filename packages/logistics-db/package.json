@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./constants": "./src/constants.ts",
     "./schema": "./src/schema.ts",
     "./seed": "./src/seed.ts"
   },

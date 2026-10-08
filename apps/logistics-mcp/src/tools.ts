@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { z } from "zod";
-import { DATASET_VERSION, DEMO_CLOCK, TIMEZONE, toLocalIso } from "@anc/logistics-db";
+import { DATASET_VERSION, DEMO_CLOCK, TIMEZONE, toLocalIso } from "@anc/logistics-db/constants";
 
 const iso = z.string().datetime({ offset: true });
 const windowSchema = z.object({ from: iso, to: iso }).refine((value) => Date.parse(value.from) < Date.parse(value.to), "from must be before to");

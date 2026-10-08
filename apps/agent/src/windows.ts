@@ -1,4 +1,5 @@
-import { DEMO_CLOCK as SIMULATION_CLOCK, TIMEZONE, toLocalIso } from "@anc/logistics-db";
+// Constants only: the db-free subpath, so the composer input path never loads better-sqlite3.
+import { DEMO_CLOCK as SIMULATION_CLOCK, TIMEZONE, toLocalIso } from "@anc/logistics-db/constants";
 
 /** The network's fixed "now". Every question is answered as of this instant. */
 export const DEMO_CLOCK = SIMULATION_CLOCK;
