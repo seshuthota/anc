@@ -287,11 +287,23 @@ function composeBriefing(surfaceId: string, presentation: PresentationInput, bri
     components.push({ id: "calm", component: "Text", text: { path: "/briefing/quiet/label" } });
   }
 
-  if (briefing.primary && actions.length) {
+  if (briefing.primary && briefing.pending) {
+    // R6: a proposed operation replaces the action row with an inline confirm on
+    // the same surface. Confirm runs the write; Cancel (or Back) restores the row.
+    const pending = briefing.pending;
+    rootChildren.push("confirm_block");
+    components.push({ id: "confirm_block", component: "Column", children: ["confirm_text", "confirm_row"] });
+    components.push({ id: "confirm_text", component: "Text", text: { path: "/briefing/pending/text" } });
+    components.push({ id: "confirm_row", component: "Row", children: pending.blocked ? ["confirm_cancel"] : ["confirm_yes", "confirm_cancel"] });
+    if (!pending.blocked) components.push(...button("confirm_yes", pending.confirmLabel, "primary", { event: { name: "confirm_action", context: { proposalId: pending.proposalId } } }));
+    components.push(...button("confirm_cancel", pending.blocked ? "Back" : "Cancel", "borderless", { event: { name: "cancel_action", context: { proposalId: pending.proposalId } } }));
+  } else if (briefing.primary && actions.length) {
     rootChildren.push("actions");
     components.push({ id: "actions", component: "Row", children: actions.map((action) => `action_${action.id}`) });
     for (const action of actions) {
-      const context = action.name === "investigate" ? { question: action.question ?? action.label } : { entities: action.entities };
+      // A catalog operation names only its catalog id: the runtime binds the records
+      // from this surface when it is proposed, whatever a client sends.
+      const context = action.name === "investigate" ? { question: action.question ?? action.label } : action.name === "propose_action" ? { actionId: action.id } : { entities: action.entities };
       components.push(...button(`action_${action.id}`, action.label, "primary", { event: { name: action.name, context } }));
     }
   }
@@ -330,6 +342,7 @@ function composeBriefing(surfaceId: string, presentation: PresentationInput, bri
       quiet: briefing.quiet,
       restLabel: briefing.restLabel ?? "",
       actions,
+      ...(briefing.pending ? { pending: briefing.pending } : {}),
     },
     metrics: {},
     findings: {},

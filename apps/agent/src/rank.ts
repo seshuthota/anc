@@ -2,6 +2,7 @@ import type { AgentFinding } from "@anc/contracts";
 import type { Principal } from "@anc/policy";
 import { getMetricDefinition } from "@anc/contracts";
 import { citedMetricIds, headlineMetrics, scopeKey, type ReconcileResult, type ReconciledMetric } from "./reconcile.js";
+import { selectBriefingActions, type PlannedAction } from "./action-catalog.js";
 
 export type BriefingPlan = {
   primary?: {
@@ -19,7 +20,11 @@ export type BriefingPlan = {
    * primary, but it is not a quiet day either.
    */
   withheld?: string;
-  suggestedActions: [];
+  /**
+   * At most three catalog operations for the primary card (R6), chosen from the
+   * records on the card and the person's grants. Empty without a primary.
+   */
+  actions: PlannedAction[];
 };
 
 const SEVERITY_WEIGHT: Record<string, number> = {
@@ -130,6 +135,8 @@ export function rankBriefing(input: {
   findings: AgentFinding[];
   reconciled: ReconcileResult;
   principal?: Principal;
+  /** `<actionId>:<recordId>` operations already done (read from this run's evidence). */
+  completedActions?: ReadonlySet<string>;
 }): BriefingPlan {
   const { reconciled, principal } = input;
   // Order-independent: specialists finish in any order.
@@ -162,7 +169,7 @@ export function rankBriefing(input: {
       .sort((left, right) => (SEVERITY_WEIGHT[right.severity] ?? 0) - (SEVERITY_WEIGHT[left.severity] ?? 0))
       .slice(0, 3)
       .map((finding) => ({ findingId: finding.findingId, title: finding.title }));
-    return { secondary: residual, quiet: true, suggestedActions: [] };
+    return { secondary: residual, quiet: true, actions: [] };
   }
 
   const eligible = new Set(primaryEligibleIds(findings, reconciled));
@@ -175,7 +182,7 @@ export function rankBriefing(input: {
     const reason = reconciled.conflicts.length
       ? `No single headline: ${reconciled.notes[0] ?? "the specialists' figures disagree"}`
       : "No single headline: the serious findings carry no figure that can stand for the whole network";
-    return { secondary, quiet: false, withheld: reason, suggestedActions: [] };
+    return { secondary, quiet: false, withheld: reason, actions: [] };
   }
 
   const primaryId = primaryPick.finding.findingId;
@@ -205,6 +212,14 @@ export function rankBriefing(input: {
   // Keep the account hop (the "so what") when there are more than three candidates.
   const kept = chain.filter((hop) => !chainHopRepeatsHeadline(hop.text, headline));
   const trimmed = kept.length > 3 ? [...kept.slice(0, 2), kept[kept.length - 1]!] : kept;
+  const onCard = new Set(trimmed.flatMap((hop) => hop.findingIds));
+  const actions = selectBriefingActions({
+    primary: primaryPick.finding,
+    related: findings.filter((finding) => onCard.has(finding.findingId) && finding.findingId !== primaryId),
+    metricId: primaryPick.metric?.metricId,
+    principal,
+    completed: input.completedActions,
+  });
 
   return {
     primary: {
@@ -216,7 +231,7 @@ export function rankBriefing(input: {
     },
     secondary,
     quiet: false,
-    suggestedActions: [],
+    actions,
   };
 }
 

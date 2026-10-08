@@ -28,11 +28,13 @@ describe("registry", () => {
   it("covers every company tool and offers no agent a write", () => {
     expect(validateRegistry()).toEqual([]);
     for (const domain of ["network", "shipments", "last_mile", "customers"] as const) {
-      const tools = authorizedTools(careLead, domain);
-      expect(tools).not.toContain("commit_complaint_assignment");
-      expect(tools).not.toContain("list_eligible_assignees");
+      for (const principal of [careLead, coo, hubSupervisor, accountManager]) {
+        const tools = authorizedTools(principal, domain);
+        for (const write of ["commit_complaint_assignment", "escalate_equipment_fault", "notify_shipper", "list_eligible_assignees"]) expect(tools).not.toContain(write);
+      }
     }
-    expect(CAPABILITIES.filter((item) => item.sideEffect === "write").map((item) => item.tool)).toEqual(["commit_complaint_assignment"]);
+    const writes = CAPABILITIES.filter((item) => item.sideEffect === "write");
+    expect(writes.map((item) => item.tool).sort()).toEqual(["commit_complaint_assignment", "escalate_equipment_fault", "notify_shipper"]);
   });
 
   it("gives each agent only its own tools, and only those the person is granted", () => {
@@ -353,4 +355,189 @@ describe("assigning a complaint", () => {
     expect(rows.every((row) => row.actionName === undefined)).toBe(true);
     await expect(act(thread, accountManager, "prepare_assignment", { entities: [{ type: "complaint", id: rows[0]!.id }] })).rejects.toThrow(/Not authorized/);
   }, 60_000);
+});
+
+describe("briefing actions (P4)", () => {
+  const BRIEF = "Brief me: what needs my attention this morning?";
+  const act = (threadId: string, principal: typeof coo, name: string, extra: Record<string, unknown> = {}) => {
+    const current = publicState(threadId, principal.id);
+    return handleAction({ name, threadId, surfaceId: current.surface?.surfaceId, surfaceRevision: current.surface?.revision, ...extra }, principal);
+  };
+  type Briefing = { actions: Array<{ id: string; label: string; name: string; entities: Array<{ type: string; id: string }> }>; pending?: { proposalId: string; actionId: string; text: string; blocked?: boolean }; primary?: { receipts?: Array<{ status: string; text: string; actionId: string; evidenceIds: string[] }> } };
+  const briefingOf = (state: Awaited<ReturnType<typeof publicState>>) => (state.surface!.dataModel as { briefing: Briefing }).briefing;
+  const buttonsOf = (state: Awaited<ReturnType<typeof publicState>>) => {
+    const components = ((state.surface!.messages as Array<Record<string, unknown>>).find((message) => "updateComponents" in message) as { updateComponents: { components: Array<Record<string, unknown>> } }).updateComponents.components;
+    return components.filter((component) => component.component === "Button").map((component) => (component.action as { event: { name: string } }).event.name);
+  };
+  const companyDb = async () => {
+    const { openLogisticsDatabase } = await import("@anc/logistics-db");
+    return openLogisticsDatabase(process.env.LOGISTICS_DB_PATH!, true);
+  };
+  const snapshot = async () => {
+    const db = await companyDb();
+    try {
+      return {
+        equipment: db.prepare("SELECT id, escalated_to escalatedTo, escalated_at IS NOT NULL escalated, version FROM equipment_events ORDER BY id").all() as Array<{ id: string; escalatedTo: string | null; escalated: number; version: number }>,
+        notifications: db.prepare("SELECT shipper_id shipperId, account_manager_id accountManagerId, topic, status, requested_by requestedBy FROM shipper_notifications ORDER BY id").all(),
+        lateAtRisk: db.prepare(`SELECT c.id, c.assignee_id assigneeId, c.version FROM complaints c JOIN shipments s ON s.id = c.shipment_id
+          WHERE c.status = 'open' AND c.category = 'late' AND substr(s.promised_by, 1, 10) = '2026-09-21' AND s.status IN ('at_hub', 'sorted') ORDER BY c.id`).all() as Array<{ id: string; assigneeId: string | null; version: number }>,
+        complaints: db.prepare("SELECT COUNT(*) n, SUM(version) v FROM complaints").get() as { n: number; v: number },
+      };
+    } finally {
+      db.close();
+    }
+  };
+
+  it("offers at most three catalog actions, bound by the runtime to the records on the primary card, and only to people granted them", async () => {
+    const cooState = await runInvestigation({ question: BRIEF, threadId: "t-act-offer-coo", principal: coo });
+    const offered = briefingOf(cooState).actions;
+    expect(offered.map((action) => [action.id, action.name, action.label])).toEqual([
+      ["escalate_equipment_fault", "propose_action", "Escalate Sorter belt B fault"],
+      ["notify_shipper", "propose_action", "Notify Godavari Organics"],
+      ["assign_complaints", "propose_action", "Assign late complaints"],
+    ]);
+    expect(offered[0]!.entities).toEqual([expect.objectContaining({ type: "equipment", id: "eq-hyd-0920" })]);
+    expect(offered[1]!.entities).toEqual([expect.objectContaining({ type: "shipper", id: "shipper-003" })]);
+    expect(buttonsOf(cooState).filter((name) => name !== "show_evidence" && name !== "investigate")).toHaveLength(3);
+
+    const hub = briefingOf(await runInvestigation({ question: BRIEF, threadId: "t-act-offer-hub", principal: hubSupervisor })).actions.map((action) => action.id);
+    expect(hub).toEqual(["escalate_equipment_fault", "drill_primary"]);
+    const accounts = briefingOf(await runInvestigation({ question: BRIEF, threadId: "t-act-offer-am", principal: accountManager })).actions.map((action) => action.id);
+    expect(accounts).toEqual(["notify_shipper", "drill_primary"]);
+    // Someone without the grant never sees the button, and a forged one is refused before any read.
+    await expect(act("t-act-offer-am", accountManager, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } })).rejects.toThrow(/Not authorized/);
+    // An action the surface does not offer cannot be proposed either.
+    await expect(act("t-act-offer-hub", hubSupervisor, "propose_action", { parameters: { actionId: "notify_shipper" } })).rejects.toThrow(/Not authorized/);
+  }, 120_000);
+
+  it("specialist connections cannot write: the company server refuses a write tool on a read client", async () => {
+    const { CompanyMcpClient } = await import("./mcp-client.js");
+    const before = await snapshot();
+    const client = new CompanyMcpClient(store, { runId: "t-read-only", principalId: coo.id });
+    await client.connect();
+    try {
+      await expect(client.call("escalate_equipment_fault", { eventId: "eq-hyd-0920", expectedVersion: 1 })).rejects.toThrow(/read-only/);
+      await expect(client.call("notify_shipper", { shipperId: "shipper-003", topic: "t", message: "m", idempotencyKey: "read-only-probe", requestedBy: coo.id })).rejects.toThrow(/read-only/);
+    } finally {
+      await client.close();
+    }
+    expect(await snapshot()).toEqual(before);
+  }, 60_000);
+
+  it("cancel restores the action row and writes nothing", async () => {
+    const thread = "t-act-cancel";
+    const brief = await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const before = await snapshot();
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    expect(proposed.surface!.surfaceId).toBe(brief.surface!.surfaceId);
+    expect(proposed.surface!.revision).toBe(brief.surface!.revision + 1);
+    const pending = briefingOf(proposed).pending!;
+    expect(pending.text).toMatch(/Escalate Sorter belt B at Hyderabad Hub \(eq-hyd-0920\) to Venkatesh Rao/);
+    expect(buttonsOf(proposed)).toEqual(expect.arrayContaining(["confirm_action", "cancel_action"]));
+    expect(buttonsOf(proposed)).not.toContain("propose_action");
+    const cancelled = await act(thread, coo, "cancel_action", { parameters: { proposalId: pending.proposalId } });
+    expect(cancelled.surface!.revision).toBe(brief.surface!.revision + 2);
+    expect(briefingOf(cancelled).pending).toBeUndefined();
+    expect(briefingOf(cancelled).actions.map((action) => action.id)).toEqual(briefingOf(brief).actions.map((action) => action.id));
+    expect(await snapshot()).toEqual(before);
+    // The cancelled proposal cannot be confirmed.
+    await expect(handleAction({ name: "confirm_action", threadId: thread, parameters: { proposalId: pending.proposalId } }, coo)).rejects.toThrow(/no longer valid/);
+  }, 120_000);
+
+  it("refuses a stale version: nothing is written and the action stays to be proposed again", async () => {
+    const thread = "t-act-stale";
+    await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    // Someone else changes the fault between propose and confirm.
+    const { openLogisticsDatabase } = await import("@anc/logistics-db");
+    const writer = openLogisticsDatabase(process.env.LOGISTICS_DB_PATH!);
+    writer.prepare("UPDATE equipment_events SET version = version + 1 WHERE id = 'eq-hyd-0920'").run();
+    writer.close();
+    const before = await snapshot();
+    const refused = await act(thread, coo, "confirm_action", { parameters: { proposalId: briefingOf(proposed).pending!.proposalId } });
+    expect(await snapshot()).toEqual(before);
+    const receipt = briefingOf(refused).primary!.receipts!.at(-1)!;
+    expect(receipt.status).toBe("failed");
+    expect(receipt.text).toMatch(/Not done: the record changed after it was read/);
+    expect(briefingOf(refused).actions.map((action) => action.id)).toContain("escalate_equipment_fault");
+  }, 120_000);
+
+  it("escalates the fault: propose, confirm, row changed, re-read, receipt on the same surface; a double click is a no-op", async () => {
+    const thread = "t-act-escalate";
+    const brief = await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const before = await snapshot();
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    // A second click on the old revision does nothing.
+    const again = await handleAction({ name: "propose_action", threadId: thread, surfaceId: brief.surface!.surfaceId, surfaceRevision: brief.surface!.revision, parameters: { actionId: "escalate_equipment_fault" } }, coo);
+    expect(again.surface!.revision).toBe(proposed.surface!.revision);
+    expect(await snapshot()).toEqual(before);
+    const proposalId = briefingOf(proposed).pending!.proposalId;
+    // Two confirms at once (a double click): one write.
+    const [done] = await Promise.all([
+      act(thread, coo, "confirm_action", { parameters: { proposalId } }),
+      act(thread, coo, "confirm_action", { parameters: { proposalId } }),
+    ]);
+    const after = await snapshot();
+    const hyd = (rows: typeof before.equipment) => rows.find((row) => row.id === "eq-hyd-0920")!;
+    expect(hyd(before.equipment)).toMatchObject({ escalatedTo: null, escalated: 0 });
+    expect(hyd(after.equipment)).toEqual({ ...hyd(before.equipment), escalatedTo: "emp-eng-hyd", escalated: 1, version: hyd(before.equipment).version + 1 });
+    expect(after.equipment.filter((row) => row.id !== "eq-hyd-0920")).toEqual(before.equipment.filter((row) => row.id !== "eq-hyd-0920"));
+    expect({ ...after, equipment: [] }).toEqual({ ...before, equipment: [] });
+    const final = publicState(thread, coo.id);
+    expect(final.surface!.surfaceId).toBe(brief.surface!.surfaceId);
+    expect(final.surface!.revision).toBe(proposed.surface!.revision + 1);
+    expect(done.surface!.revision).toBeGreaterThanOrEqual(proposed.surface!.revision);
+    const briefing = briefingOf(final);
+    expect(briefing.pending).toBeUndefined();
+    const receipt = briefing.primary!.receipts!.at(-1)!;
+    expect(receipt).toMatchObject({ status: "succeeded", actionId: "escalate_equipment_fault" });
+    expect(receipt.text).toMatch(/^Escalated Sorter belt B to Venkatesh Rao at \d{2}:\d{2} IST · maintenance log updated · receipt op-/);
+    expect(receipt.evidenceIds[0]).toMatch(/^list_equipment_events-/);
+    expect(briefing.actions.map((action) => action.id)).not.toContain("escalate_equipment_fault");
+    // A late duplicate confirm is a no-op too.
+    await handleAction({ name: "confirm_action", threadId: thread, parameters: { proposalId } }, coo);
+    expect(await snapshot()).toEqual(after);
+    expect(store.listAudit(coo.id).filter((entry) => entry.action === "operation.commit" && entry.resource === "equipment:eq-hyd-0920" && entry.outcome === "succeeded")).toHaveLength(1);
+    // The next briefing reads the escalation and does not offer it again.
+    const next = await runInvestigation({ question: BRIEF, threadId: "t-act-after-escalate", principal: coo });
+    expect(briefingOf(next).actions.map((action) => action.id)).toEqual(["notify_shipper", "assign_complaints", "drill_primary"]);
+  }, 180_000);
+
+  it("queues a notice for Godavari Organics' account manager and sends nothing", async () => {
+    const thread = "t-act-notify";
+    await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const before = await snapshot();
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "notify_shipper" } });
+    expect(briefingOf(proposed).pending!.text).toMatch(/Queue a delay notice for Godavari Organics with their account manager, Arjun Mehta\?.*Nothing is sent to the shipper\./);
+    const done = await act(thread, coo, "confirm_action", { parameters: { proposalId: briefingOf(proposed).pending!.proposalId } });
+    const after = await snapshot();
+    expect(before.notifications).toEqual([]);
+    expect(after.notifications).toEqual([{ shipperId: "shipper-003", accountManagerId: "emp-am-1", topic: "at-risk-today", status: "queued", requestedBy: coo.id }]);
+    expect({ ...after, notifications: [] }).toEqual({ ...before, notifications: [] });
+    expect(briefingOf(done).primary!.receipts!.at(-1)!.text).toMatch(/^Notice for Godavari Organics queued for account manager Arjun Mehta at \d{2}:\d{2} IST · nothing was sent · receipt op-/);
+    // Proposing it again reads the queued notice and offers nothing to confirm.
+    const thread2 = "t-act-notify-2";
+    await runInvestigation({ question: BRIEF, threadId: thread2, principal: coo });
+    const repeat = await act(thread2, coo, "propose_action", { parameters: { actionId: "notify_shipper" } });
+    expect(briefingOf(repeat).pending).toMatchObject({ blocked: true });
+    expect(buttonsOf(repeat)).not.toContain("confirm_action");
+  }, 180_000);
+
+  it("assigns the open late complaints about today's at-risk parcels across the care team", async () => {
+    const thread = "t-act-assign";
+    await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const before = await snapshot();
+    const open = before.lateAtRisk.filter((row) => row.assigneeId === null);
+    expect(open.length).toBeGreaterThan(5);
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "assign_complaints" } });
+    expect(briefingOf(proposed).pending!.text).toMatch(new RegExp(`^Assign ${open.length} open late complaints`));
+    const done = await act(thread, coo, "confirm_action", { parameters: { proposalId: briefingOf(proposed).pending!.proposalId } });
+    const after = await snapshot();
+    const changed = after.lateAtRisk.filter((row) => open.some((item) => item.id === row.id));
+    expect(changed.every((row) => ["emp-care-1", "emp-care-2", "emp-care-3"].includes(row.assigneeId ?? ""))).toBe(true);
+    expect(changed.every((row) => row.version === open.find((item) => item.id === row.id)!.version + 1)).toBe(true);
+    expect(after.complaints.v - before.complaints.v).toBe(open.length);
+    expect({ ...after, lateAtRisk: [], complaints: { n: 0, v: 0 } }).toEqual({ ...before, lateAtRisk: [], complaints: { n: 0, v: 0 } });
+    expect(briefingOf(done).primary!.receipts!.at(-1)!.text).toMatch(new RegExp(`^Assigned ${open.length} late complaints to Farah Siddiqui, Karthik Iyer, Sneha Kulkarni · 0 still without an owner · receipt op-`));
+  }, 180_000);
 });

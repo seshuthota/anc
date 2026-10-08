@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canUseTool, redactForPrincipal, resolvePrincipal, sessionThreadId, TOOL_CAPABILITIES } from "./index.js";
+import { canUseTool, redactForPrincipal, resolvePrincipal, sessionThreadId, TOOL_CAPABILITIES, WRITE_CAPABILITIES } from "./index.js";
 
 describe("policy", () => {
   it("gives each person only the tools their role needs", () => {
@@ -15,15 +15,25 @@ describe("policy", () => {
     expect(canUseTool(care, "get_hub_status")).toBe(false);
   });
 
-  it("lets nobody but customer care change a complaint, and refuses unknown tools and people", () => {
-    for (const id of ["user-coo", "user-hub-hyd", "user-lastmile", "user-accounts"]) {
+  it("lets only customer care and the COO change a complaint, and refuses unknown tools and people", () => {
+    // P4: the COO may hand the morning's late complaints to care from the briefing.
+    for (const id of ["user-hub-hyd", "user-lastmile", "user-accounts"]) {
       expect(canUseTool(resolvePrincipal(id), "commit_complaint_assignment")).toBe(false);
     }
+    expect(canUseTool(resolvePrincipal("user-coo"), "commit_complaint_assignment")).toBe(true);
     expect(canUseTool(resolvePrincipal("user-coo"), "execute_sql")).toBe(false);
     expect(() => resolvePrincipal("user-nobody")).toThrow(/Unknown principal/);
     // The COO reads everything that is a read.
-    const reads = Object.keys(TOOL_CAPABILITIES).filter((tool) => TOOL_CAPABILITIES[tool] !== "cap.complaints.assign");
+    const reads = Object.keys(TOOL_CAPABILITIES).filter((tool) => !WRITE_CAPABILITIES.includes(TOOL_CAPABILITIES[tool]!));
     expect(reads.every((tool) => canUseTool(resolvePrincipal("user-coo"), tool))).toBe(true);
+  });
+
+  it("grants each briefing operation only to the roles that own it (P4)", () => {
+    const can = (id: string, tool: string) => canUseTool(resolvePrincipal(id), tool);
+    expect(["user-coo", "user-hub-hyd"].every((id) => can(id, "escalate_equipment_fault"))).toBe(true);
+    expect(["user-lastmile", "user-accounts", "user-care"].some((id) => can(id, "escalate_equipment_fault"))).toBe(false);
+    expect(["user-coo", "user-accounts"].every((id) => can(id, "notify_shipper"))).toBe(true);
+    expect(["user-hub-hyd", "user-lastmile", "user-care"].some((id) => can(id, "notify_shipper"))).toBe(false);
   });
 
   it("isolates demo sessions by owner", () => {

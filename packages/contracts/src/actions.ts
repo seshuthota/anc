@@ -10,7 +10,11 @@ export const ActionNameSchema = z.enum([
   "commit_assignment",
   "select_assignee",
   "save_draft",
-  "set_selection"
+  "set_selection",
+  // Briefing operations (Slice 4): a catalog action is proposed, then confirmed or cancelled on the same surface.
+  "propose_action",
+  "confirm_action",
+  "cancel_action"
 ]);
 
 export const SemanticActionSchema = z.object({

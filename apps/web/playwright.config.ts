@@ -5,6 +5,11 @@ import { join, resolve } from "node:path";
 const root = resolve(__dirname, "../..");
 const agentPort = 4110;
 const webPort = 3010;
+// The e2e run writes (P4 escalations, notices, assignments), so it gets its own
+// freshly seeded company database and never touches data/logistics.sqlite.
+// Kept in the environment so workers that re-read this file see the same path.
+process.env.ANC_E2E_LOGISTICS_DB ??= join(tmpdir(), `anc-e2e-logistics-${Date.now()}.sqlite`);
+const logisticsDb = process.env.ANC_E2E_LOGISTICS_DB;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -20,7 +25,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "pnpm --filter @anc/agent start",
+      command: "pnpm --filter @anc/logistics-db seed && pnpm --filter @anc/agent start",
       cwd: root,
       url: `http://127.0.0.1:${agentPort}/health`,
       reuseExistingServer: false,
@@ -32,7 +37,7 @@ export default defineConfig({
         MODEL_EXECUTION_MODE: "fixture",
         INVESTIGATION_STEP_DELAY_MS: "1200",
         RUNTIME_DB_PATH: join(tmpdir(), `anc-e2e-runtime-${Date.now()}.sqlite`),
-        LOGISTICS_DB_PATH: resolve(root, "data/logistics.sqlite"),
+        LOGISTICS_DB_PATH: logisticsDb,
       },
     },
     {

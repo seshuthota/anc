@@ -164,6 +164,9 @@ export const CAPABILITIES: CapabilityDefinition[] = [
   }),
   cap("list_eligible_assignees", "customers", "People who can own a complaint", { internal: true }),
   cap("commit_complaint_assignment", "customers", "Assign a complaint to an owner", { sideEffect: "write" }),
+  // Briefing operations (Slice 4): run only by the confirm step, never by a specialist.
+  cap("escalate_equipment_fault", "network", "Escalate an open equipment fault to the hub's on-call engineer", { sideEffect: "write", internal: true }),
+  cap("notify_shipper", "customers", "Queue a notice for a shipper's account manager (nothing is sent)", { sideEffect: "write", internal: true }),
 ];
 
 export const SPECIALISTS: SpecialistDefinition[] = [

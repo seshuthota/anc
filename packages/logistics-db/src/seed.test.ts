@@ -81,4 +81,28 @@ describe("logistics seed", () => {
     expect(count(db, "SELECT COUNT(*) n FROM complaints WHERE status = 'open' AND category = 'late'")).toBe(0);
     db.close();
   });
+
+  it("migrates a database seeded before schema v2 without changing its rows (P4)", async () => {
+    const Database = (await import("better-sqlite3")).default;
+    const { ensureLogisticsSchema, logisticsSchemaOutdated } = await import("./index.js");
+    const path = join(mkdtempSync(join(tmpdir(), "anc-logistics-")), "old.sqlite");
+    const old = new Database(path);
+    old.exec("CREATE TABLE hubs (id TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT NOT NULL, sort_capacity_per_hour INTEGER NOT NULL); CREATE TABLE employees (id TEXT PRIMARY KEY, name TEXT NOT NULL, team TEXT NOT NULL, title TEXT NOT NULL); CREATE TABLE equipment_events (id TEXT PRIMARY KEY, hub_id TEXT NOT NULL, equipment TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, severity TEXT NOT NULL, summary TEXT NOT NULL);");
+    old.prepare("INSERT INTO equipment_events VALUES ('eq-1','hub-hyd','Belt','2026-09-20T22:10:00.000+05:30',NULL,'high','down')").run();
+    expect(logisticsSchemaOutdated(old)).toBe(true);
+    old.close();
+    ensureLogisticsSchema(path);
+    const db = new Database(path, { readonly: true });
+    expect(logisticsSchemaOutdated(db)).toBe(false);
+    expect(db.prepare("SELECT id, escalated_to, escalated_at, version FROM equipment_events").all()).toEqual([{ id: "eq-1", escalated_to: null, escalated_at: null, version: 1 }]);
+    db.close();
+  });
+
+  it("seeds the on-call engineer and an empty notification queue (P4)", () => {
+    const db = openSeeded("hub-fault");
+    expect(db.prepare("SELECT engineer_id e FROM hub_on_call WHERE hub_id = ?").get(FAULTED_HUB)).toEqual({ e: "emp-eng-hyd" });
+    expect(count(db, "SELECT COUNT(*) n FROM shipper_notifications")).toBe(0);
+    expect(count(db, "SELECT COUNT(*) n FROM equipment_events WHERE escalated_at IS NOT NULL")).toBe(0);
+    db.close();
+  });
 });

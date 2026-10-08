@@ -152,7 +152,18 @@ export const PresentationBriefingPrimarySchema = z.object({
     evidenceIds: BriefingEvidenceSchema
   })).max(3),
   confidence: z.enum(["high", "medium", "low"]),
-  evidenceIds: BriefingEvidenceSchema.min(1)
+  evidenceIds: BriefingEvidenceSchema.min(1),
+  /**
+   * Receipts for operations confirmed from this briefing, newest last. Written by
+   * the runtime after the write and a re-read of the affected record; never by a model.
+   */
+  receipts: z.array(z.object({
+    operationId: z.string().min(1),
+    actionId: z.string().min(1),
+    status: z.enum(["succeeded", "failed"]),
+    text: z.string().min(1),
+    evidenceIds: BriefingEvidenceSchema.default([])
+  })).max(3).optional()
 });
 
 export const PresentationBriefingSecondarySchema = z.object({
@@ -180,7 +191,20 @@ export const PresentationBriefingSchema = z.object({
   }),
   /** Summary line of the collapsed secondary list ("2 lower-priority items · everything else is running to plan"). */
   restLabel: z.string().min(1).optional(),
-  actions: z.array(PresentationActionSchema).max(3).default([])
+  actions: z.array(PresentationActionSchema).max(3).default([]),
+  /**
+   * A proposed operation awaiting confirmation. While set, the action row is
+   * replaced by an inline confirm block (Confirm / Cancel) on the same surface.
+   */
+  pending: z.object({
+    proposalId: z.string().min(1),
+    actionId: z.string().min(1),
+    /** What confirming will do, in plain words, including what it writes. */
+    text: z.string().min(1),
+    confirmLabel: z.string().min(1),
+    /** Nothing to confirm (already done, nothing left): only a way back. */
+    blocked: z.boolean().optional()
+  }).optional()
 });
 
 export const PresentationInputSchema = z.object({

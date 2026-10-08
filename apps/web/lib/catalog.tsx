@@ -131,6 +131,8 @@ type PrimaryFindingData = {
   evidenceIds?: string[];
   metric?: { metricId: string; value: string; label: string; definition: string; windowLabel: string; denominatorLabel?: string; evidenceIds: string[]; resultPath: string };
   chain?: Array<{ text: string; kind: "observed" | "inferred"; kindLabel?: string; evidenceIds?: string[] }>;
+  /** Operations confirmed from this card, written by the runtime after the write and a re-read. */
+  receipts?: Array<{ operationId: string; actionId: string; status: "succeeded" | "failed"; text: string; evidenceIds?: string[] }>;
 };
 
 type Row = { id?: string; cells?: unknown[]; sortValues?: unknown[]; actionName?: string; entityType?: string; entityId?: string };
@@ -348,6 +350,19 @@ export const workspaceCatalog = createCatalog(workspaceDefinitions, {
               </li>
             ))}
           </ol>
+        ) : null}
+        {finding.receipts?.length ? (
+          <ul className="ws-primary-receipts" aria-label="Done from this briefing">
+            {finding.receipts.map((receipt) => (
+              <li key={receipt.operationId + receipt.text} className={`ws-receipt ws-receipt-${receipt.status}`} data-testid="action-receipt" data-action-id={receipt.actionId}>
+                <span aria-hidden="true">{receipt.status === "succeeded" ? "✓" : "!"}</span>
+                <span>{receipt.text}</span>
+                {receipt.evidenceIds?.length ? (
+                  <button type="button" className="ws-button ws-button-borderless" onClick={() => evidence(receipt.evidenceIds)}>Record</button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         ) : null}
         <div className="ws-primary-foot">
           <span className="ws-caption">{finding.confidenceLabel ?? ""}</span>

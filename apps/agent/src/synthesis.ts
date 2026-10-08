@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import type { BriefingPlan } from "./rank.js";
 import { rankBriefing, reviewChain, reviewLeadAnalystRanking } from "./rank.js";
 import { headlineMetrics, type ReconcileResult } from "./reconcile.js";
+import { applyActionOrder, reviewActionOrder, type PlannedAction } from "./action-catalog.js";
 import { resolveExecutionMode, resolveModelConfig } from "./provider.js";
 import { specialistLabel } from "./registry.js";
 import { recordUsage } from "./usage.js";
@@ -22,6 +23,8 @@ export type Synthesis = {
   whyItMatters?: string;
   confidence?: "high" | "medium" | "low";
   chain?: Array<{ text: string; kind: "observed" | "inferred"; findingIds: string[] }>;
+  /** The analyst's order for the planned actions. It may reorder them only. */
+  actionOrder?: string[];
 };
 
 export type SynthesisRequest = {
@@ -32,6 +35,8 @@ export type SynthesisRequest = {
   primaryFindingId?: string;
   /** The reconciled figures the headline and whyItMatters may use, as displayed. */
   figures?: Array<{ metricId: string; label: string; value: number; scope: string; denominator?: number }>;
+  /** The actions the runtime planned from its catalog. The analyst may put them in a different order, nothing else. */
+  actions?: Array<{ id: string; label: string }>;
 };
 
 /**
@@ -83,6 +88,7 @@ const SYSTEM = `You are the lead analyst at an Indian parcel carrier. Specialist
 - chain: up to three hops {text, kind, findingIds}; kind "observed" or "inferred".
 - steps: two to six short sentences in order of cause and effect (legacy support). Each cites findingIds.
 - separate: up to four issues not part of that chain.
+- actionOrder (optional): the request's action ids in the order this audience should see them. Use only those ids, each once; do not add or drop one.
 - Use only figures, names and times that appear in the findings. In headline and whyItMatters use only numbers listed in the request's "figures" (plus clock times); a shipper's slice of a network total is not a headline figure. Name places and shippers by name.
 
 Reply with one JSON object including headline, primaryFindingId, secondaryFindingIds, whyItMatters, confidence, chain, steps, separate.`;
@@ -91,7 +97,7 @@ function review(reply: unknown, request: SynthesisRequest, gate: FigureGate, pri
   const errors: string[] = [];
   const value = (reply ?? {}) as {
     headline?: unknown; steps?: unknown; separate?: unknown;
-    primaryFindingId?: unknown; secondaryFindingIds?: unknown; whyItMatters?: unknown; confidence?: unknown; chain?: unknown;
+    primaryFindingId?: unknown; secondaryFindingIds?: unknown; whyItMatters?: unknown; confidence?: unknown; chain?: unknown; actionOrder?: unknown;
   };
   const known = new Set(request.findings.map((finding) => finding.id));
   const haystack = `${JSON.stringify(request.findings)} ${request.objective}`;
@@ -149,9 +155,12 @@ function review(reply: unknown, request: SynthesisRequest, gate: FigureGate, pri
   if (request.primaryFindingId && primaryFindingId !== request.primaryFindingId) {
     errors.push(`primaryFindingId must be ${request.primaryFindingId}, the ranked primary${primaryFindingId ? `, not ${primaryFindingId}` : ""}`);
   }
+  // R6: the analyst may reorder the planned actions, never invent or drop one.
+  errors.push(...reviewActionOrder(value.actionOrder, (request.actions ?? []).map((action) => ({ id: action.id as PlannedAction["id"], label: action.label, entities: [] }))));
+  const actionOrder = Array.isArray(value.actionOrder) ? value.actionOrder.map(String) : undefined;
 
   return errors.length ? { errors: [...new Set(errors)] } : {
-    synthesis: { headline, steps, separate, primaryFindingId, secondaryFindingIds, whyItMatters, confidence, chain: chain.length ? chain : undefined },
+    synthesis: { headline, steps, separate, primaryFindingId, secondaryFindingIds, whyItMatters, confidence, chain: chain.length ? chain : undefined, ...(actionOrder?.length ? { actionOrder } : {}) },
     errors,
   };
 }
@@ -223,9 +232,11 @@ export async function synthesize(input: {
   runId?: string;
   reconciled?: ReconcileResult;
   principal?: Principal;
+  /** Operations already done this morning (from this run's evidence); not offered again. */
+  completedActions?: ReadonlySet<string>;
 }): Promise<{ synthesis?: Synthesis; briefingPlan?: BriefingPlan; reason?: string }> {
   const reconciled = input.reconciled ?? { metrics: [], conflicts: [], notes: [] };
-  const ranked = rankBriefing({ findings: input.findings, reconciled, principal: input.principal });
+  const ranked = rankBriefing({ findings: input.findings, reconciled, principal: input.principal, completedActions: input.completedActions });
 
   // Nothing qualifies to lead (a quiet day, or a withheld headline): there is no
   // primary for the Lead Analyst to describe, so no model headline is asked for.
@@ -248,6 +259,7 @@ export async function synthesize(input: {
       scope: metric.scope.id ? `${metric.scope.type} ${metric.scope.id}` : metric.scope.type,
       denominator: metric.denominator?.value,
     })),
+    actions: ranked.actions.map((action) => ({ id: action.id, label: action.label })),
     findings: input.findings.map((finding) => ({
       id: finding.findingId,
       from: specialistLabel(finding.agentId as Parameters<typeof specialistLabel>[0]),
@@ -276,7 +288,7 @@ export async function synthesize(input: {
           reason = rankingErrors[0]!;
           continue;
         }
-        return { synthesis: checked.synthesis, briefingPlan: ranked };
+        return { synthesis: checked.synthesis, briefingPlan: { ...ranked, actions: applyActionOrder(ranked.actions, checked.synthesis.actionOrder) } };
       }
       feedback = checked.errors.slice(0, 10).map((error) => `- ${error}`).join("\n");
       reason = checked.errors[0]!;

@@ -26,7 +26,8 @@ export type ComposerModelRequest = {
   catalog: string;
   data: unknown;
   blocks: Array<{ id: string; what: string }>;
-  actions: Array<{ name: string; label: string }>;
+  /** For "propose_action", `actionId` names the catalog operation the button proposes. */
+  actions: Array<{ name: string; label: string; actionId?: string }>;
   evidenceIds: string[];
 };
 
@@ -78,7 +79,7 @@ Rules:
 - When the data has a "synthesis", it is the lead analyst's connected account and it is the centrepiece. Show its steps in their order inside one Sequence (cause first, consequences after), each stop holding the step's text and its kindLabel so an inferred link never reads as fact. Do not repeat a finding as its own card when a step already covers it. Show each "separate" issue apart from the sequence, so it is clearly not part of it.
 - In "briefing" mode the data holds a "briefing" plan, and the surface is one primary plus a collapsed rest:
   - Place the "primary_block" block first when it is listed. It already shows the one figure, why it matters, the chain and confidence; do not repeat any of them.
-  - Offer the plan's actions (data.briefing.actions, at most three) as Buttons; an "investigate" action carries context {"question": <its question>}.
+  - Offer the plan's actions (data.briefing.actions, at most three) as Buttons; an "investigate" action carries context {"question": <its question>}, a "propose_action" action carries context {"actionId": <its id>}. Do not invent an action or an actionId.
   - Put the secondary items (data.briefing.secondary, at most three) inside exactly one Collapsible whose summary is bound to /briefing/restLabel. Each item is its title (bound) and one Button with action "investigate" and context {"question": <its question>}; an evidence Button is optional.
   - With no primary_block (a quiet day, or no single headline), show /title as a heading and /briefing/quiet/label under it.
   - Do not add Stat tiles, Cards, or a Sequence. Do not show anything else.
@@ -175,6 +176,9 @@ function review(components: Component[], template: Component[], blockIds: string
       } else if (name === "show_evidence") {
         const ids = [event?.context?.evidenceId, ...(Array.isArray(event?.context?.evidenceIds) ? event.context.evidenceIds : [])].filter(Boolean).map(String);
         if (!ids.length || ids.some((item) => !evidence.has(item))) errors.push(`Button ${id} cites evidence that is not in the data`);
+      } else if (name === "propose_action") {
+        const actionId = event?.context?.actionId;
+        if (!request.actions.some((action) => action.name === "propose_action" && action.actionId === actionId)) errors.push(`Button ${id} proposes ${String(actionId ?? "nothing")}, which is not one of the plan's actions`);
       } else if (!offered.has(name)) {
         errors.push(`action ${name} is not offered for this answer`);
       }
@@ -305,7 +309,7 @@ export async function composeSurface(surfaceId: string, presentation: Presentati
       : outline({ title: data.title, subtitle: data.subtitle, synthesis: data.synthesis, metrics: data.metrics, findings: data.findings }),
     blocks: blockIds.map((id) => ({ id, what: BLOCKS[id]! })),
     actions: presentation.briefing
-      ? presentation.briefing.actions.filter((action) => action.name !== "investigate" && ActionNameSchema.safeParse(action.name).success).map((action) => ({ name: action.name, label: action.label }))
+      ? presentation.briefing.actions.filter((action) => action.name !== "investigate" && ActionNameSchema.safeParse(action.name).success).map((action) => ({ name: action.name, label: action.label, ...(action.name === "propose_action" ? { actionId: action.id } : {}) }))
       : briefing ? [] : presentation.actions.filter((action) => ActionNameSchema.safeParse(action.name).success).map((action) => ({ name: action.name, label: action.label })),
     evidenceIds: [...new Set([
       ...presentation.metrics.map((metric) => metric.evidenceId),
@@ -332,7 +336,9 @@ export async function composeSurface(surfaceId: string, presentation: Presentati
       const offered = new Map(presentation.actions.map((action) => [action.name, action]));
       const components = [
         ...authored.map((component) => {
-          const event = (component.action as { event?: { name?: string } } | undefined)?.event;
+          const event = (component.action as { event?: { name?: string; context?: { actionId?: unknown } } } | undefined)?.event;
+          // A proposed operation carries only its catalog id; the runtime binds its records.
+          if (event?.name === "propose_action") return { ...component, action: { event: { name: "propose_action", context: { actionId: String(event.context?.actionId ?? "") } } } };
           const match = event?.name ? offered.get(event.name) : undefined;
           return match ? { ...component, action: { event: { name: match.name, context: { entities: match.entities } } } } : component;
         }),

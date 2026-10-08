@@ -162,6 +162,7 @@ export class RuntimeStore {
     return undefined;
   }
 
+  /** Every payload one tool returned in a run, for one owner (newest first). */
   /** With an owner, only that owner's row counts: one person's evidence never vouches for another's finding. */
   evidenceExists(evidenceId: string, ownerId?: string): boolean {
     return Boolean(ownerId
@@ -249,6 +250,11 @@ export class RuntimeStore {
       threadId: row.thread_id,
       investigationId: row.investigation_id,
     };
+  }
+
+  /** The highest saved revision of a surface (0 when none), so a new revision never overwrites an old one. */
+  latestSurfaceRevision(surfaceId: string): number {
+    return (this.db.prepare("SELECT COALESCE(MAX(revision), 0) n FROM surfaces WHERE surface_id = ?").get(surfaceId) as { n: number }).n;
   }
 
   listSurfaces(threadId: string) {

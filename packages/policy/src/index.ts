@@ -37,7 +37,13 @@ export const TOOL_CAPABILITIES: Record<string, CapabilityId> = {
   list_complaints: "cap.complaints.read",
   list_eligible_assignees: "cap.complaints.assign",
   commit_complaint_assignment: "cap.complaints.assign",
+  // Operations offered on a briefing (Slice 4). Writes, so never given to a specialist.
+  escalate_equipment_fault: "cap.equipment.escalate",
+  notify_shipper: "cap.shippers.notify",
 };
+
+/** Capabilities that change company records. No specialist (read) connection may use them. */
+export const WRITE_CAPABILITIES: readonly CapabilityId[] = ["cap.complaints.assign", "cap.equipment.escalate", "cap.shippers.notify"];
 
 const NETWORK: CapabilityId[] = ["cap.hubs.status", "cap.hubs.throughput", "cap.equipment.read", "cap.routes.read"];
 const SHIPMENTS: CapabilityId[] = ["cap.shipments.read", "cap.shipments.search", "cap.shipments.at_risk", "cap.performance.read"];
@@ -53,7 +59,9 @@ export const PERSONAS: Principal[] = [
     title: "Chief Operating Officer",
     team: "operations",
     employeeId: "emp-ops",
-    grants: [...NETWORK, ...SHIPMENTS, ...LAST_MILE, ...CUSTOMERS],
+    // Reads everything, and may act on the morning's primary finding: escalate a fault,
+    // queue a notice for a key account's manager, and hand late complaints to care.
+    grants: [...NETWORK, ...SHIPMENTS, ...LAST_MILE, ...CUSTOMERS, "cap.equipment.escalate", "cap.shippers.notify", "cap.complaints.assign"],
     deniedFields: [],
     preferences: {
       roleDescription: "Runs the whole network and answers for delivery promises to customers.",
@@ -67,7 +75,7 @@ export const PERSONAS: Principal[] = [
     title: "Hyderabad Hub Supervisor",
     team: "hub",
     employeeId: "emp-hub-hyd",
-    grants: [...NETWORK, ...SHIPMENTS],
+    grants: [...NETWORK, ...SHIPMENTS, "cap.equipment.escalate"],
     deniedFields: [],
     preferences: {
       roleDescription: "Keeps the Hyderabad sort floor moving and gets route runs out on time.",
@@ -95,7 +103,7 @@ export const PERSONAS: Principal[] = [
     title: "Key Account Manager",
     team: "accounts",
     employeeId: "emp-am-1",
-    grants: [...CUSTOMERS, "cap.shipments.read", "cap.shipments.search", "cap.shipments.at_risk"],
+    grants: [...CUSTOMERS, "cap.shipments.read", "cap.shipments.search", "cap.shipments.at_risk", "cap.shippers.notify"],
     deniedFields: [],
     preferences: {
       roleDescription: "Looks after the largest shippers and their on-time commitments.",

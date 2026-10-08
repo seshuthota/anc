@@ -386,7 +386,11 @@ export function createAgentServer() {
           return;
         }
         send(200, await handleAction(payload, principal));
-      }).catch((error) => send(409, { error: error instanceof Error ? error.message : "invalid action" }));
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : "invalid action";
+        // A forged or revoked operation is refused as unauthorized, anything else as a conflict.
+        send(/^Not authorized/.test(message) ? 403 : 409, { error: message });
+      });
       return;
     }
 

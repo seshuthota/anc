@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { DATASET_VERSION, DEFAULT_LOGISTICS_DB_PATH, DEMO_CLOCK, TIMEZONE, localMidnight, toLocalIso } from "./constants.js";
 import { openLogisticsDatabase } from "./index.js";
-import { schemaSql } from "./schema.js";
+import { schemaSql, SCHEMA_VERSION } from "./schema.js";
 
 /**
  * `hub-fault` is the demo: a sorter belt fails overnight at one hub, and its
@@ -82,6 +82,7 @@ const EMPLOYEES = [
   ["emp-care-1", "Farah Siddiqui", "customer-care", "Customer Care Lead"],
   ["emp-care-2", "Karthik Iyer", "customer-care", "Customer Care Agent"],
   ["emp-care-3", "Sneha Kulkarni", "customer-care", "Customer Care Agent"],
+  ["emp-eng-hyd", "Venkatesh Rao", "maintenance", "Hyderabad Hub Engineer (on call)"],
 ] as const;
 
 // Invented business names; none refers to a real company.
@@ -217,10 +218,10 @@ export function seedLogistics(db: Database.Database, scenario: LogisticsScenario
   }
 
   db.transaction(() => {
-    db.exec("DROP TABLE IF EXISTS complaints; DROP TABLE IF EXISTS equipment_events; DROP TABLE IF EXISTS hub_hourly; DROP TABLE IF EXISTS shipments; DROP TABLE IF EXISTS route_runs; DROP TABLE IF EXISTS locker_sites; DROP TABLE IF EXISTS shippers; DROP TABLE IF EXISTS employees; DROP TABLE IF EXISTS districts; DROP TABLE IF EXISTS hubs; DROP TABLE IF EXISTS dataset_meta;");
+    db.exec("DROP TABLE IF EXISTS shipper_notifications; DROP TABLE IF EXISTS hub_on_call; DROP TABLE IF EXISTS complaints; DROP TABLE IF EXISTS equipment_events; DROP TABLE IF EXISTS hub_hourly; DROP TABLE IF EXISTS shipments; DROP TABLE IF EXISTS route_runs; DROP TABLE IF EXISTS locker_sites; DROP TABLE IF EXISTS shippers; DROP TABLE IF EXISTS employees; DROP TABLE IF EXISTS districts; DROP TABLE IF EXISTS hubs; DROP TABLE IF EXISTS dataset_meta;");
     db.exec(schemaSql);
     const meta = db.prepare("INSERT INTO dataset_meta (key,value) VALUES (?,?)");
-    meta.run("schema_version", "1"); meta.run("dataset_version", `${DATASET_VERSION}:${scenario}`); meta.run("demo_clock", DEMO_CLOCK); meta.run("timezone", TIMEZONE);
+    meta.run("schema_version", String(SCHEMA_VERSION)); meta.run("dataset_version", `${DATASET_VERSION}:${scenario}`); meta.run("demo_clock", DEMO_CLOCK); meta.run("timezone", TIMEZONE);
 
     const insertHub = db.prepare("INSERT INTO hubs VALUES (?,?,?,?)");
     for (const hub of HUBS) insertHub.run(hub.id, hub.name, hub.city, hub.capacity);
@@ -265,7 +266,8 @@ export function seedLogistics(db: Database.Database, scenario: LogisticsScenario
       }
     }
 
-    const insertEquipment = db.prepare("INSERT INTO equipment_events VALUES (?,?,?,?,?,?,?)");
+    db.prepare("INSERT INTO hub_on_call (hub_id, engineer_id) VALUES (?, ?)").run(FAULTED_HUB, "emp-eng-hyd");
+    const insertEquipment = db.prepare("INSERT INTO equipment_events (id, hub_id, equipment, started_at, ended_at, severity, summary) VALUES (?,?,?,?,?,?,?)");
     insertEquipment.run("eq-bom-0912", "hub-bom", "Inbound scanner 2", iso(today - 9 * DAY + 20 * HOUR), iso(today - 9 * DAY + 20 * HOUR + 40 * MINUTE), "low", "Scanner offline; parcels scanned by hand until restart.");
     insertEquipment.run("eq-blr-0917", "hub-blr", "Conveyor C", iso(today - 4 * DAY + 23 * HOUR), iso(today - 4 * DAY + 23 * HOUR + 25 * MINUTE), "low", "Conveyor jam cleared by floor staff.");
     if (fault) insertEquipment.run("eq-hyd-0920", FAULTED_HUB, "Sorter belt B", iso(faultStart), null, "high", "Sorter belt B stopped on a drive motor fault. Manual sorting in operation; engineer requested.");

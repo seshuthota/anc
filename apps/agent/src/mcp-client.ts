@@ -29,7 +29,11 @@ export class CompanyMcpClient {
   private client: Client | undefined;
   private transport: StdioClientTransport | undefined;
 
-  constructor(private readonly store?: RuntimeStore, private readonly ctx?: { runId: string; taskId?: string; principalId?: string }) {}
+  /**
+   * `writable` is for operation clients only (the confirm step of an action). Every
+   * other client, including every specialist's, opens the company database read-only.
+   */
+  constructor(private readonly store?: RuntimeStore, private readonly ctx?: { runId: string; taskId?: string; principalId?: string; writable?: boolean }) {}
 
   async connect(): Promise<void> {
     if (this.client) return;
@@ -46,7 +50,8 @@ export class CompanyMcpClient {
         PATH: process.env.PATH ?? "/usr/bin",
         LOGISTICS_DB_PATH: dbPath,
         ANC_PRINCIPAL_ID: this.ctx?.principalId ?? process.env.ANC_PRINCIPAL_ID ?? DEMO_OWNER_ID,
-        LOGISTICS_DB_WRITABLE: process.env.LOGISTICS_DB_WRITABLE ?? "true",
+        // Decided here, never inherited from the environment: reads cannot write.
+        LOGISTICS_DB_WRITABLE: this.ctx?.writable === true ? "true" : "false",
       },
       stderr: "pipe",
     });

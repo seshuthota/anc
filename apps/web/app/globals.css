@@ -279,6 +279,11 @@ button { cursor: pointer; }
 .ws-hop { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .ws-hop:not(:last-child)::after { color: var(--marigold-deep); content: "\2192"; font-weight: 700; margin: 0 12px; }
 .ws-hop-inferred > span:first-child { font-style: italic; }
+.ws-primary-receipts { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.ws-receipt { align-items: center; border-radius: 8px; display: flex; flex-wrap: wrap; font-size: 14px; gap: 8px; padding: 6px 10px; }
+.ws-receipt-succeeded { background: var(--peacock-wash); color: var(--peacock); }
+.ws-receipt-failed { background: var(--vermilion-wash); color: var(--vermilion); }
+.ws-receipt > span:first-child { font-weight: 700; }
 .ws-primary-foot { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: space-between; }
 .ws-collapsible { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 18px; }
 .ws-collapsible > summary { color: var(--ink-soft); cursor: pointer; font-weight: 600; }
@@ -303,3 +308,6 @@ button { cursor: pointer; }
 .ev-hit { font-weight: 700; }
 .ev-raw { margin-top: 16px; }
 .ev-error { color: #b42318; }
+
+/* A double click on an action must not select the card text around it. */
+.a2ui-root button { user-select: none; }

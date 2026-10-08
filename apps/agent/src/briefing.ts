@@ -132,13 +132,21 @@ export function buildBriefing(input: {
     ? `${secondary.length} ${plan.quiet ? "minor" : "lower-priority"} item${secondary.length === 1 ? "" : "s"} · ${plan.quiet ? "none needs action" : "everything else is running to plan"}`
     : undefined;
 
-  const actions = primary ? [{
+  // R6: catalog operations first (proposed, then confirmed on this surface), bound to
+  // the records the ranker chose. "Look into this" fills a free slot; at most three in all.
+  const operations = (plan.actions ?? []).map((action) => ({
+    id: action.id,
+    label: action.label,
+    name: "propose_action",
+    entities: action.entities.map((entity) => ({ type: entity.type, id: entity.id, ...(entity.label ? { label: entity.label } : {}) })),
+  }));
+  const actions = primary ? [...operations, {
     id: "drill_primary",
     label: "Look into this",
     name: "investigate",
     entities: primaryFinding!.entities.map((entity) => ({ type: entity.type, id: entity.id, ...(entity.label ? { label: entity.label } : {}) })),
     question: `What is behind this: ${primaryFinding!.title}?`,
-  }] : [];
+  }].slice(0, 3) : [];
 
   return {
     ...(primary ? { primary } : {}),

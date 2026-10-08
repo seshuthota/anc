@@ -11,7 +11,7 @@ import { validateA2UI } from "./a2ui-validate.js";
 import { resolveExecutionMode, resolveModelConfig } from "./provider.js";
 import { assertUsdBudgetCanBeEnforced, priceCost, takeUsage, type ModelUsage } from "./usage.js";
 import { DEMO_OWNER_ID, redactForPrincipal, resolvePrincipal, sessionThreadId, withoutGrants, type Principal } from "@anc/policy";
-import { commitComplaintAssignment, prepareComplaintAssignment, selectComplaintAssignee } from "./operations.js";
+import { authorizeBriefingOperation, cancelBriefingAction, commitComplaintAssignment, confirmBriefingAction, prepareComplaintAssignment, proposeBriefingAction, selectComplaintAssignee } from "./operations.js";
 import { DEFAULT_THREAD_ID } from "./windows.js";
 import { openEvidence } from "./evidence-explain.js";
 
@@ -338,11 +338,28 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
   });
   if (!parsed.success) throw new Error(parsed.error.message);
   const action = parsed.data;
+  const operation = action.name === "propose_action" || action.name === "confirm_action" || action.name === "cancel_action";
+  if (operation) authorizeBriefingOperation(store, principal, action.name, action.parameters);
   if (!store.rememberAction(action.actionId, threadId, new Date().toISOString())) {
     return current;
   }
   if (current.surface && (action.surfaceId !== current.surface.surfaceId || action.surfaceRevision !== current.surface.revision)) {
+    // A briefing operation clicked on an older revision (a double click, a second
+    // tab) is a no-op: each is idempotent by proposal, and nothing is written.
+    if (operation) return current;
     throw new Error("stale surface action");
+  }
+  if (action.name === "propose_action") {
+    await proposeBriefingAction({ store, principal, threadId, actionId: String(action.parameters.actionId ?? "") });
+    return publicState(threadId, principal.id);
+  }
+  if (action.name === "confirm_action") {
+    await confirmBriefingAction({ store, principal, threadId, proposalId: String(action.parameters.proposalId ?? "") });
+    return publicState(threadId, principal.id);
+  }
+  if (action.name === "cancel_action") {
+    cancelBriefingAction({ store, principal, threadId, proposalId: String(action.parameters.proposalId ?? "") });
+    return publicState(threadId, principal.id);
   }
   if (action.name === "show_evidence") {
     // Every cited id, not just the first: a finding can rest on several records.

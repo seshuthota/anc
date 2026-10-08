@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * A regional parcel carrier. Parcels are collected from shippers, sorted
@@ -100,7 +100,31 @@ CREATE TABLE IF NOT EXISTS equipment_events (
   started_at TEXT NOT NULL,
   ended_at TEXT,
   severity TEXT NOT NULL CHECK (severity IN ('low','medium','high')),
-  summary TEXT NOT NULL
+  summary TEXT NOT NULL,
+  -- Set by the escalate_equipment_fault operation; version guards concurrent writes.
+  escalated_to TEXT REFERENCES employees(id),
+  escalated_at TEXT,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+-- Who maintenance escalations go to at each hub.
+CREATE TABLE IF NOT EXISTS hub_on_call (
+  hub_id TEXT PRIMARY KEY REFERENCES hubs(id),
+  engineer_id TEXT NOT NULL REFERENCES employees(id)
+);
+
+-- Notices queued for a shipper's account manager. Nothing in this demo sends
+-- them anywhere: a row is the whole effect of the notify_shipper operation.
+CREATE TABLE IF NOT EXISTS shipper_notifications (
+  id TEXT PRIMARY KEY,
+  shipper_id TEXT NOT NULL REFERENCES shippers(id),
+  account_manager_id TEXT REFERENCES employees(id),
+  topic TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','cancelled')),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  requested_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS complaints (

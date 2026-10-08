@@ -198,5 +198,28 @@ describe("agent HTTP", () => {
       expect(opened.evidenceList.every((item) => !item.error)).toBe(true);
       expect(opened.evidence.evidenceId).toBe(ids[0]);
     });
+
+    it("refuses a forged briefing operation with a 403 and writes nothing (P4)", async () => {
+      const post = (principalId: string, body: Record<string, unknown>) => fetch(`${base}/runtime/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...as(principalId) },
+        body: JSON.stringify({ actionId: `act-${Date.now()}-${Math.random()}`, surfaceId: state.surface.surfaceId, surfaceRevision: state.surface.revision, ...body }),
+      });
+      // The account manager has no escalate grant: no button, and a forged request is refused.
+      const forged = await post("user-accounts", { name: "propose_action", parameters: { actionId: "escalate_equipment_fault" } });
+      expect(forged.status).toBe(403);
+      // The COO's proposal cannot be confirmed by someone else.
+      const proposed = await post("user-coo", { name: "propose_action", parameters: { actionId: "escalate_equipment_fault" } });
+      expect(proposed.status).toBe(200);
+      const pending = (await proposed.json() as { surface: { dataModel: { briefing: { pending: { proposalId: string } } } } }).surface.dataModel.briefing.pending;
+      const stolen = await post("user-hub-hyd", { name: "confirm_action", parameters: { proposalId: pending.proposalId } });
+      expect(stolen.status).toBe(403);
+      const unknown = await post("user-coo", { name: "propose_action", parameters: { actionId: "reroute_parcels" } });
+      expect(unknown.status).toBe(409);
+      const { openLogisticsDatabase } = await import("@anc/logistics-db");
+      const db = openLogisticsDatabase(process.env.LOGISTICS_DB_PATH!, true);
+      expect(db.prepare("SELECT escalated_to FROM equipment_events WHERE id = 'eq-hyd-0920'").get()).toEqual({ escalated_to: null });
+      db.close();
+    }, 60_000);
   });
 });

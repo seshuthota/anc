@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 import { openLogisticsDatabase, seedLogistics, type LogisticsScenario } from "@anc/logistics-db";
 import { registerLogisticsTools, TOOL_DOMAINS, type LogisticsTool } from "./tools.js";
 
-function harness(scenario: LogisticsScenario = "hub-fault", authorize?: (tool: LogisticsTool) => void) {
+function harness(scenario: LogisticsScenario = "hub-fault", authorize?: (tool: LogisticsTool) => void, writable?: boolean) {
   const db = openLogisticsDatabase(join(mkdtempSync(join(tmpdir(), "anc-logistics-mcp-")), "logistics.sqlite"));
   seedLogistics(db, scenario);
   const handlers = new Map<string, (args: unknown) => unknown>();
-  registerLogisticsTools({ registerTool(name: string, _meta: unknown, handler: (args: unknown) => unknown) { handlers.set(name, handler); } }, db, { authorize });
+  registerLogisticsTools({ registerTool(name: string, _meta: unknown, handler: (args: unknown) => unknown) { handlers.set(name, handler); } }, db, { authorize, writable });
   const call = (tool: LogisticsTool, args: unknown = {}) => (handlers.get(tool)!(args) as { structuredContent: { evidenceId: string; timezone: string; result: any; completeness: { complete: boolean; total?: number } } }).structuredContent;
   return { db, handlers, call };
 }
@@ -158,6 +158,63 @@ describe("logistics MCP tools", () => {
     expect(call("summarize_at_risk_shipments").result.totals.atRisk).toBe(0);
     expect(call("list_locker_sites", { minOccupancy: 0.9 }).result.rows).toHaveLength(0);
     expect(call("get_delivery_performance").result.totals.onTimeRate).toBeGreaterThan(0.95);
+    db.close();
+  });
+
+  it("escalates an open fault once, to the on-call engineer, and refuses a stale or repeated escalation (P4)", () => {
+    const { db, call, handlers } = harness();
+    const row = () => db.prepare("SELECT escalated_to, escalated_at IS NOT NULL escalated, version FROM equipment_events WHERE id = 'eq-hyd-0920'").get();
+    const open = (call("list_equipment_events", { hubId: "hub-hyd", openOnly: true }).result.rows as Array<Record<string, unknown>>)[0]!;
+    expect(open).toMatchObject({ id: "eq-hyd-0920", escalatedAt: null, version: 1, onCallEngineerId: "emp-eng-hyd" });
+    expect(row()).toEqual({ escalated_to: null, escalated: 0, version: 1 });
+    const others = JSON.stringify(db.prepare("SELECT * FROM equipment_events WHERE id <> 'eq-hyd-0920' ORDER BY id").all());
+    expect(() => handlers.get("escalate_equipment_fault")!({ eventId: "eq-hyd-0920", expectedVersion: 7 })).toThrow(/stale/);
+    expect(row()).toEqual({ escalated_to: null, escalated: 0, version: 1 });
+    const done = call("escalate_equipment_fault", { eventId: "eq-hyd-0920", expectedVersion: 1 }).result;
+    expect(done.before).toMatchObject({ escalatedTo: null, version: 1 });
+    expect(done.after).toMatchObject({ escalatedTo: "emp-eng-hyd", version: 2 });
+    expect(row()).toEqual({ escalated_to: "emp-eng-hyd", escalated: 1, version: 2 });
+    expect(JSON.stringify(db.prepare("SELECT * FROM equipment_events WHERE id <> 'eq-hyd-0920' ORDER BY id").all())).toBe(others);
+    expect(() => handlers.get("escalate_equipment_fault")!({ eventId: "eq-hyd-0920", expectedVersion: 2 })).toThrow(/already escalated/);
+    expect(() => handlers.get("escalate_equipment_fault")!({ eventId: "eq-blr-0917", expectedVersion: 1 })).toThrow(/already cleared/);
+    const reread = (call("list_equipment_events", { hubId: "hub-hyd", openOnly: true }).result.rows as Array<Record<string, unknown>>)[0]!;
+    expect(reread).toMatchObject({ escalatedTo: "emp-eng-hyd", escalatedToName: "Venkatesh Rao", version: 2 });
+    db.close();
+  });
+
+  it("queues a shipper notice for the account manager, once per key, and sends nothing (P4)", () => {
+    const { db, call } = harness();
+    const count = () => (db.prepare("SELECT COUNT(*) n FROM shipper_notifications").get() as { n: number }).n;
+    expect(count()).toBe(0);
+    const args = { shipperId: "shipper-003", topic: "at-risk-today", message: "Parcels promised today may be late.", idempotencyKey: "notify:shipper-003:at-risk-today:2026-09-21", requestedBy: "user-coo" };
+    const first = call("notify_shipper", args).result;
+    expect(first.created).toBe(true);
+    expect(first.after).toMatchObject({ shipperId: "shipper-003", accountManagerId: "emp-am-1", status: "queued" });
+    const again = call("notify_shipper", args).result;
+    expect(again.created).toBe(false);
+    expect(again.after.id).toBe(first.after.id);
+    expect(count()).toBe(1);
+    const shipper = call("get_shipper", { shipperId: "shipper-003" }).result;
+    expect(shipper.queuedNotifications).toEqual([expect.objectContaining({ id: first.after.id, status: "queued", accountManagerId: "emp-am-1" })]);
+    db.close();
+  });
+
+  it("finds the 11 open late complaints about parcels at risk today (P4)", () => {
+    const { db, call } = harness();
+    const result = call("list_complaints", { status: "open", category: "late", unassignedOnly: true, atRiskOnly: true, page: { limit: 100, offset: 0 } }).result;
+    expect(result.total).toBe(11);
+    expect(result.rows.every((row: { assigneeId: string | null; category: string }) => row.assigneeId === null && row.category === "late")).toBe(true);
+    db.close();
+  });
+
+  it("refuses every write on a read-only connection before touching the database (P4)", () => {
+    const { db, handlers } = harness("hub-fault", undefined, false);
+    const before = JSON.stringify([db.prepare("SELECT * FROM equipment_events ORDER BY id").all(), db.prepare("SELECT COUNT(*) n, SUM(version) v FROM complaints").get(), db.prepare("SELECT COUNT(*) n FROM shipper_notifications").get()]);
+    expect(() => handlers.get("escalate_equipment_fault")!({ eventId: "eq-hyd-0920", expectedVersion: 1 })).toThrow(/read-only/);
+    expect(() => handlers.get("notify_shipper")!({ shipperId: "shipper-003", topic: "t", message: "m", idempotencyKey: "key-12345", requestedBy: "user-coo" })).toThrow(/read-only/);
+    const open = db.prepare("SELECT id, version FROM complaints WHERE status = 'open' AND assignee_id IS NULL LIMIT 1").get() as { id: string; version: number };
+    expect(() => handlers.get("commit_complaint_assignment")!({ complaintId: open.id, assigneeId: "emp-care-1", expectedVersion: open.version })).toThrow(/read-only/);
+    expect(JSON.stringify([db.prepare("SELECT * FROM equipment_events ORDER BY id").all(), db.prepare("SELECT COUNT(*) n, SUM(version) v FROM complaints").get(), db.prepare("SELECT COUNT(*) n FROM shipper_notifications").get()])).toBe(before);
     db.close();
   });
 });
