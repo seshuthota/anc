@@ -1,0 +1,80 @@
+[
+  {
+    "findingId": "f-905",
+    "taskId": "task-shipments",
+    "agentId": "shipments",
+    "kind": "observation",
+    "title": "905 parcels at risk",
+    "summary": "Network at risk.",
+    "severity": "high",
+    "entities": [],
+    "claims": [
+      {
+        "claimId": "f-905-c1",
+        "statement": "Network at risk.",
+        "evidenceIds": [
+          "ev-f-905"
+        ],
+        "resultPaths": [
+          "totals.atRisk"
+        ],
+        "metrics": [
+          {
+            "name": "Parcels at risk today",
+            "value": 905,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "parcels_at_risk_today",
+            "scope": {
+              "type": "network"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  },
+  {
+    "findingId": "f-902",
+    "taskId": "task-customers",
+    "agentId": "customers",
+    "kind": "observation",
+    "title": "902 parcels at risk",
+    "summary": "Disagreeing total.",
+    "severity": "high",
+    "entities": [],
+    "claims": [
+      {
+        "claimId": "f-902-c1",
+        "statement": "Disagreeing total.",
+        "evidenceIds": [
+          "ev-f-902"
+        ],
+        "resultPaths": [
+          "totals.atRisk"
+        ],
+        "metrics": [
+          {
+            "name": "Parcels at risk today",
+            "value": 902,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "parcels_at_risk_today",
+            "scope": {
+              "type": "network"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  }
+]

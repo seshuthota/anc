@@ -7,6 +7,8 @@ import { hasGrant } from "@anc/policy";
 import { peekSubstitutions } from "./execution.js";
 import { isBroadObjective, MAX_TASKS, proposePlan, validatePlan } from "./planner.js";
 import { synthesize, type Synthesis } from "./synthesis.js";
+import { reconcileMetrics, type ReconcileResult } from "./reconcile.js";
+import { rankBriefing, type BriefingPlan } from "./rank.js";
 import { RuntimeStore } from "@anc/runtime-storage";
 import { validateA2UI } from "./a2ui-validate.js";
 import { recordSubstitution } from "./execution.js";
@@ -31,6 +33,8 @@ export type GraphState = {
   view?: string;
   clarification?: string;
   synthesis?: Synthesis;
+  reconciled?: ReconcileResult;
+  briefingPlan?: BriefingPlan;
 };
 
 const State = Annotation.Root({
@@ -65,6 +69,8 @@ const State = Annotation.Root({
   view: Annotation<string | undefined>(),
   clarification: Annotation<string | undefined>(),
   synthesis: Annotation<Synthesis | undefined>(),
+  reconciled: Annotation<ReconcileResult | undefined>(),
+  briefingPlan: Annotation<BriefingPlan | undefined>(),
 });
 
 export type ActivitySink = (message: string, kind?: "agent_started" | "agent_completed" | "tool_queried" | "finding_discovered" | "task_delegated" | "investigation_completed" | "status") => void;
@@ -221,28 +227,18 @@ async function executeNode(state: typeof State.State): Promise<Partial<GraphStat
   }));
   ctx.store.claimArtifacts(state.runId, state.threadId, ctx.principal.id);
   const mergedFindings = { ...state.findings, ...findings };
-  noteContradictions(Object.values(mergedFindings), ctx);
   return { tasks, results, findings, selectedEntities: entitiesFrom(Object.values(mergedFindings)) };
 }
 
-function noteContradictions(findings: AgentFinding[], ctx: GraphContext) {
-  const byMetric = new Map<string, number[]>();
-  for (const finding of findings) {
-    for (const claim of finding.claims) {
-      for (const metric of claim.metrics) {
-        const values = byMetric.get(metric.name) ?? [];
-        values.push(metric.value);
-        byMetric.set(metric.name, values);
-      }
-    }
+async function reconcileNode(state: typeof State.State): Promise<Partial<GraphState>> {
+  const ctx = ctxOf(state);
+  if (ctx.checkCancelled()) return { status: "cancelled" };
+  const findings = Object.values(state.findings);
+  const reconciled = reconcileMetrics(findings);
+  for (const note of reconciled.notes) {
+    ctx.emit(`Reconciliation: ${note}`, "status");
   }
-  for (const [name, values] of byMetric) {
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    if (max - min > Math.max(1e-6, Math.abs(min) * 0.05)) {
-      ctx.emit(`Contradictory ${name} values remain visible until resolved`, "status");
-    }
-  }
+  return { reconciled };
 }
 
 async function composeNode(state: typeof State.State): Promise<Partial<GraphState>> {
@@ -257,7 +253,7 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   // so an older table cannot title or pad a new answer.
   const didWork = Object.keys(state.tasks).length > 0;
   const artifacts = didWork ? current : [...current, ...listed.filter((item) => item.runId !== state.runId)];
-  const presentation = toPresentation({ intent: state.intent, objective: state.objective, findings, failedDomains, artifacts, view: state.view, clarification: state.clarification, synthesis: state.synthesis, principal: ctx.principal });
+  const presentation = toPresentation({ intent: state.intent, objective: state.objective, findings, failedDomains, artifacts, view: state.view, clarification: state.clarification, synthesis: state.synthesis, principal: ctx.principal, reconciled: state.reconciled, briefingPlan: state.briefingPlan });
   const surfaceId = `surface-${state.investigationId}`;
   const revision = (state.surfaceRevision ?? 0) + 1;
   ctx.emit("UI Composer is designing the workspace", "status");
@@ -314,18 +310,25 @@ async function synthesizeNode(state: typeof State.State): Promise<Partial<GraphS
   const ctx = ctxOf(state);
   if (ctx.checkCancelled()) return { status: "cancelled" };
   const findings = Object.values(state.findings);
-  if (findings.length < 2) return {};
+  const reconciled = state.reconciled ?? reconcileMetrics(findings);
   const audience = `${ctx.principal.title}. ${ctx.principal.preferences.roleDescription} Cares about: ${ctx.principal.preferences.priorities.join(", ")}.`;
-  const outcome = await synthesize({ objective: state.objective, audience, findings, runId: state.runId });
+  const outcome = await synthesize({ objective: state.objective, audience, findings, runId: state.runId, reconciled, principal: ctx.principal });
+  if (outcome.reason && outcome.synthesis) {
+    ctx.emit("Lead Analyst ranking was replaced by the deterministic ranker", "status");
+    recordSubstitution(state.runId, "lead-analyst", outcome.reason);
+  }
   if (outcome.synthesis) {
     ctx.emit(`Lead Analyst connected the findings: ${outcome.synthesis.headline}`, "finding_discovered");
-    return { synthesis: outcome.synthesis };
+    return { synthesis: outcome.synthesis, briefingPlan: outcome.briefingPlan, reconciled };
+  }
+  if (outcome.briefingPlan) {
+    return { briefingPlan: outcome.briefingPlan, reconciled };
   }
   if (outcome.reason) {
     ctx.emit("Lead Analyst could not connect the findings; showing them side by side", "status");
     recordSubstitution(state.runId, "lead-analyst", outcome.reason);
   }
-  return {};
+  return { reconciled, briefingPlan: outcome.briefingPlan ?? rankBriefing({ findings, reconciled, principal: ctx.principal }) };
 }
 
 function routeAfterPlan(state: typeof State.State): "execute" | "compose" | typeof END {  if (state.status === "cancelled") return END;
@@ -333,21 +336,23 @@ function routeAfterPlan(state: typeof State.State): "execute" | "compose" | type
   return pending.length ? "execute" : "compose";
 }
 
-function routeAfterExecute(state: typeof State.State): "plan" | "synthesize" | typeof END {
+function routeAfterExecute(state: typeof State.State): "plan" | "reconcile" | typeof END {
   if (state.status === "cancelled") return END;
   const pending = Object.values(state.tasks).filter((item) => item.status === "pending");
-  return pending.length ? "plan" : "synthesize";
+  return pending.length ? "plan" : "reconcile";
 }
 
 export function createInvestigationGraph(checkpointer: SqliteSaver) {
   const graph = new StateGraph(State)
     .addNode("plan", planNode)
     .addNode("execute", executeNode)
+    .addNode("reconcile", reconcileNode)
     .addNode("synthesize", synthesizeNode)
     .addNode("compose", composeNode)
     .addEdge(START, "plan")
     .addConditionalEdges("plan", routeAfterPlan, { execute: "execute", compose: "compose", [END]: END })
-    .addConditionalEdges("execute", routeAfterExecute, { plan: "plan", synthesize: "synthesize", [END]: END })
+    .addConditionalEdges("execute", routeAfterExecute, { plan: "plan", reconcile: "reconcile", [END]: END })
+    .addEdge("reconcile", "synthesize")
     .addEdge("synthesize", "compose")
     .addEdge("compose", END);
   return graph.compile({ checkpointer });
@@ -367,6 +372,8 @@ type PresentationSource = {
   clarification?: string;
   synthesis?: Synthesis;
   principal?: Principal;
+  reconciled?: ReconcileResult;
+  briefingPlan?: BriefingPlan;
 };
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
@@ -377,7 +384,7 @@ const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
  * from stored evidence or checked findings; nothing is authored at this step.
  */
 export function toPresentation(source: PresentationSource): PresentationInput {
-  const { intent, objective, failedDomains = [], artifacts = [], view, clarification, synthesis, principal } = source;
+  const { intent, objective, failedDomains = [], artifacts = [], view, clarification, synthesis, principal, reconciled, briefingPlan } = source;
   const findings = [...source.findings].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
   const question = clarification ?? (intent === "clarification" ? "A detail is needed before this can be answered." : undefined);
   if (question) {
@@ -391,18 +398,38 @@ export function toPresentation(source: PresentationSource): PresentationInput {
     return { title: "Incomplete answer", subtitle: "The specialists could not complete this question.", view: "summary", metrics: [], findings: [], actions: [], limitations: unavailable };
   }
 
-  const metrics = findings.flatMap((finding) => finding.claims.flatMap((claim) => claim.metrics.flatMap((metric) => {
-    const evidenceId = claim.evidenceIds[0];
-    if (!evidenceId) return [];
+  const plan = briefingPlan ?? (reconciled ? rankBriefing({ findings, reconciled, principal }) : undefined);
+  const evidenceOf = (ids: string[]) => [...new Set(findings.filter((finding) => ids.includes(finding.findingId)).flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds)))];
+
+  // Metrics come only from the reconciled set (never a raw flatten of every claim).
+  const reconciledMetrics = (reconciled?.metrics ?? []).filter((metric) => !metric.ofWhichOf);
+  const metrics = reconciledMetrics.slice(0, 4).map((metric) => {
     const ratio = /ratio|rate|percent|share/i.test(metric.unit) && metric.value >= 0 && metric.value <= 1;
     const percent = /percent/i.test(metric.unit) && metric.value > 1;
     const value = ratio ? `${(metric.value * 100).toFixed(1)}%` : percent ? `${metric.value.toFixed(1)}%` : metric.value.toLocaleString("en-IN", { maximumFractionDigits: 1 });
-    return [{ id: `${finding.findingId}-${metric.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"), label: metric.name.replaceAll("_", " "), value, detail: /ratio|rate|percent|count/i.test(metric.unit) ? undefined : metric.unit, evidenceId, tone: finding.severity === "high" || finding.severity === "critical" ? "danger" as const : "neutral" as const }];
-  // Two claims can name the same figure; show it once, and keep ids unique for the surface.
-  }))).filter((metric, index, all) => all.findIndex((other) => other.id === metric.id || (other.label === metric.label && other.value === metric.value)) === index);
+    const den = metric.denominator ? ` of ${metric.denominator.value.toLocaleString("en-IN")}` : "";
+    return {
+      id: `${metric.metricId}-${metric.scope.type}-${metric.scope.id ?? "all"}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+      label: metric.label,
+      value,
+      detail: metric.definition + den,
+      evidenceId: metric.evidenceIds[0]!,
+      tone: metric.value > 0 && (metric.metricId === "parcels_at_risk_today" || metric.scope.type === "network") ? "danger" as const : "neutral" as const,
+    };
+  }).filter((metric) => metric.evidenceId);
 
-  const evidenceOf = (ids: string[]) => [...new Set(findings.filter((finding) => ids.includes(finding.findingId)).flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds)))];
-  const presentationFindings = findings.map((finding) => ({
+  const primaryFinding = plan?.primary ? findings.find((finding) => finding.findingId === plan.primary!.findingId) : undefined;
+  const secondaryIds = new Set(plan?.secondary.map((item) => item.findingId) ?? []);
+  const presentationFindings = (
+    plan?.primary
+      ? [
+          ...(primaryFinding ? [primaryFinding] : []),
+          ...findings.filter((finding) => secondaryIds.has(finding.findingId) && finding.findingId !== plan.primary!.findingId),
+          // Keep remaining findings available for non-briefing views.
+          ...(!isBroadObjective(objective) ? findings.filter((finding) => finding.findingId !== plan.primary!.findingId && !secondaryIds.has(finding.findingId)) : []),
+        ]
+      : findings
+  ).map((finding) => ({
     id: finding.findingId,
     title: finding.title,
     body: finding.summary,
@@ -422,16 +449,18 @@ export function toPresentation(source: PresentationSource): PresentationInput {
   const points = seriesPayload?.points ?? [];
 
   const broad = isBroadObjective(objective);
-  // A row can be acted on only by someone allowed to; otherwise the table is read-only.
   const rowAction = tablePayload?.rowAction && (!principal || hasGrant(principal, "cap.complaints.assign")) ? tablePayload.rowAction : undefined;
   const rows = (tablePayload?.rows ?? []).map((row) => ({ ...row, actionName: rowAction?.name }));
   const resolvedView = resolveView(view, { hasTable: rows.length > 0, hasChart: points.length >= 2, hasForm: intent === "prepare_assignment" || intent === "commit_assignment" });
-  const quiet = !findings.some((finding) => finding.severity === "high" || finding.severity === "critical");
+  const quiet = plan ? plan.primary === undefined : false;
   const single = resolvedView !== "summary" && !synthesis;
   const title = synthesis?.headline
+    ?? (plan?.primary && primaryFinding ? primaryFinding.title : undefined)
     ?? (single && tablePayload?.title ? tablePayload.title.split(":")[0]! : undefined)
     ?? (broad ? (quiet ? "Nothing needs your attention this morning" : "This morning") : (presentationFindings[0]?.title ?? "Results"));
-  const subtitle = quiet && broad ? "The network is running to plan as far as the specialists could see." : (presentationFindings[0]?.body ?? "Records from the company's systems.");
+  const subtitle = quiet && broad
+    ? "The network is running to plan as far as the specialists could see."
+    : (synthesis?.whyItMatters ?? primaryFinding?.summary ?? presentationFindings[0]?.body ?? "Records from the company's systems.");
   const numericColumn = rows[0]?.sortValues?.findIndex((value) => Number.isFinite(value)) ?? -1;
 
   return {
@@ -443,8 +472,14 @@ export function toPresentation(source: PresentationSource): PresentationInput {
       steps: synthesis.steps.map((step) => ({ ...step, evidenceIds: evidenceOf(step.findingIds) })),
       separate: synthesis.separate.map((item) => ({ ...item, evidenceIds: evidenceOf(item.findingIds) })),
     } : undefined,
-    metrics: resolvedView === "table" ? [] : metrics.slice(0, 4),
-    findings: presentationFindings,
+    metrics: resolvedView === "table" ? [] : (() => {
+      if (broad && quiet) return [];
+      if (!(broad && plan?.primary?.metric)) return metrics;
+      const primaryId = plan.primary.metric.metricId.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const matched = metrics.filter((metric) => metric.id.startsWith(primaryId)).slice(0, 1);
+      return matched.length ? matched : metrics.slice(0, 1);
+    })(),
+    findings: broad && quiet ? [] : broad && plan ? presentationFindings.slice(0, 1 + (plan.secondary.length)) : presentationFindings,
     chart: points.length >= 2 ? {
       id: seriesArtifact!.id,
       title: seriesPayload?.title ?? "Trend",
@@ -463,16 +498,13 @@ export function toPresentation(source: PresentationSource): PresentationInput {
     actions: [],
     limitations: [
       ...unavailable,
+      ...(reconciled?.notes ?? []),
       synthesis?.steps.some((step) => step.kind === "inferred") ? "Links marked as inferred are the analyst's reasoning across findings, not something a system recorded." : "",
       objective && !broad ? `Question: ${objective}` : "",
     ].filter(Boolean),
   };
 }
 
-/**
- * Chooses the layout. The planner's view wins when it names a supported one;
- * otherwise the shape of what was found decides.
- */
 function resolveView(view: string | undefined, available: { hasTable: boolean; hasChart: boolean; hasForm: boolean }): PresentationInput["view"] {
   if (available.hasForm) return "form";
   if (view && (PRESENTATION_VIEWS as readonly string[]).includes(view)) return view as PresentationInput["view"];

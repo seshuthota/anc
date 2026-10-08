@@ -1,0 +1,28 @@
+[
+  {
+    "findingId": "f-quiet-hub",
+    "taskId": "task-network",
+    "agentId": "network",
+    "kind": "observation",
+    "title": "Hubs running to plan",
+    "summary": "Nothing waiting.",
+    "severity": "info",
+    "entities": [],
+    "claims": [
+      {
+        "claimId": "f-quiet-hub-c1",
+        "statement": "Nothing waiting.",
+        "evidenceIds": [
+          "ev-f-quiet-hub"
+        ],
+        "resultPaths": [],
+        "metrics": [],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  }
+]

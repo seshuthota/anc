@@ -42,7 +42,7 @@ describe("agent HTTP", () => {
     expect(response.ok).toBe(true);
     const state = await response.json() as { status: string; surface?: { title: string }; execution?: { executionMode: string } };
     expect(["completed", "partial"]).toContain(state.status);
-    expect(state.surface?.title).toMatch(/This morning|Nothing needs your attention|Incomplete answer|Results/);
+    expect(state.surface?.title).toMatch(/This morning|Nothing needs your attention|Incomplete answer|Results|at risk|Hyderabad|sorter|fault/i);
     expect(state.execution?.executionMode).toBe("fixture");
   }, 60_000);
 

@@ -1,0 +1,90 @@
+[
+  {
+    "findingId": "f-net",
+    "taskId": "task-shipments",
+    "agentId": "shipments",
+    "kind": "observation",
+    "title": "905 parcels at risk of missing today's promise",
+    "summary": "Network.",
+    "severity": "high",
+    "entities": [],
+    "claims": [
+      {
+        "claimId": "f-net-c1",
+        "statement": "Network.",
+        "evidenceIds": [
+          "ev-f-net"
+        ],
+        "resultPaths": [
+          "totals.atRisk"
+        ],
+        "metrics": [
+          {
+            "name": "Parcels at risk today",
+            "value": 905,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "parcels_at_risk_today",
+            "scope": {
+              "type": "network"
+            },
+            "denominator": {
+              "value": 4000
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  },
+  {
+    "findingId": "f-ship",
+    "taskId": "task-customers",
+    "agentId": "customers",
+    "kind": "observation",
+    "title": "Godavari Organics has 218 parcels at risk today",
+    "summary": "Shipper scope.",
+    "severity": "high",
+    "entities": [
+      {
+        "type": "shipper",
+        "id": "shipper-003",
+        "label": "Godavari Organics"
+      }
+    ],
+    "claims": [
+      {
+        "claimId": "f-ship-c1",
+        "statement": "Shipper scope.",
+        "evidenceIds": [
+          "ev-f-ship"
+        ],
+        "resultPaths": [
+          "rows.0.atRiskToday"
+        ],
+        "metrics": [
+          {
+            "name": "Parcels at risk today",
+            "value": 218,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "parcels_at_risk_today",
+            "scope": {
+              "type": "shipper",
+              "id": "shipper-003"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  }
+]

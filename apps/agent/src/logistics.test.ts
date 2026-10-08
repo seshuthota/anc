@@ -124,10 +124,13 @@ describe("lead analyst", () => {
     separate: [{ text: "Two Chennai lockers are full, unrelated to Hyderabad.", findingIds: ["f-lockers"] }],
   };
 
-  it("stays out of the way when there is no model or too little to connect", async () => {
-    expect(await synthesize({ objective: "brief me", audience: "COO", findings })).toEqual({});
+  it("uses the deterministic ranker when there is no model", async () => {
+    const outcome = await synthesize({ objective: "brief me", audience: "COO", findings });
+    expect(outcome.briefingPlan?.quiet).toBe(false);
+    expect(outcome.synthesis?.headline || outcome.briefingPlan?.primary?.findingId).toBeTruthy();
     useSynthesisModel(async () => good);
-    expect(await synthesize({ objective: "brief me", audience: "COO", findings: findings.slice(0, 1) })).toEqual({});
+    const single = await synthesize({ objective: "brief me", audience: "COO", findings: findings.slice(0, 1) });
+    expect(single.briefingPlan).toBeTruthy();
   });
 
   it("accepts an account that cites real findings and keeps inferred links marked", async () => {
@@ -148,8 +151,8 @@ describe("lead analyst", () => {
       let calls = 0;
       useSynthesisModel(async () => { calls += 1; return reply; });
       const outcome = await synthesize({ objective: "brief me", audience: "COO", findings });
-      expect(outcome.synthesis).toBeUndefined();
       expect(outcome.reason).toBeTruthy();
+      expect(outcome.briefingPlan || outcome.synthesis).toBeTruthy();
       expect(calls).toBe(2);
     }
   });
@@ -167,8 +170,15 @@ describe("a question end to end, without a model", () => {
     const started = state.activity.filter((item) => item.kind === "agent_started").map((item) => item.message).sort();
     expect(started).toEqual(["Customers Agent started", "Last-Mile Agent started", "Network Agent started", "Shipments Agent started"]);
     expect(validateA2UI(state.surface!.messages as never)).toEqual([]);
-    const findings = (state.surface!.dataModel as { findings: Record<string, { evidenceIds: string[] }> }).findings;
-    expect(Object.keys(findings).length).toBeGreaterThanOrEqual(6);
+    const findings = (state.surface!.dataModel as { findings: Record<string, { evidenceIds: string[]; title?: string }> }).findings;
+    expect(Object.keys(findings).length).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(findings).length).toBeLessThanOrEqual(4);
+    expect(state.surface!.title).toMatch(/at risk|905|Hyderabad|sorter|fault/i);
+    expect(JSON.stringify(state.activity)).not.toMatch(/Contradictory records/i);
+    const metrics = (state.surface!.dataModel as { metrics?: Record<string, { label?: string; value?: string }> }).metrics ?? {};
+    const labels = Object.values(metrics).map((metric) => metric.label ?? "");
+    expect(labels.some((label) => /at risk/i.test(label))).toBe(true);
+    expect(Object.values(metrics).some((metric) => String(metric.value).includes("905"))).toBe(true);
     for (const item of Object.values(findings)) {
       expect(item.evidenceIds.length).toBeGreaterThan(0);
       for (const id of item.evidenceIds) expect(store.getEvidence(id, coo.id)).toBeTruthy();

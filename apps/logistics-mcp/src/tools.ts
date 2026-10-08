@@ -139,7 +139,14 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
       minutesLate: Math.max(0, Math.round((Date.parse(row.actualDeparture ?? NOW) - Date.parse(row.scheduledDeparture)) / 60000)),
       parcelsLeftBehind: row.parcelsPlanned - row.parcelsLoaded,
     }));
-    const totals = { runs: rows.length, held: rows.filter((row) => row.status === "held").length, parcelsPlanned: rows.reduce((sum, row) => sum + row.parcelsPlanned, 0), parcelsLoaded: rows.reduce((sum, row) => sum + row.parcelsLoaded, 0) };
+    const totals = {
+      runs: rows.length,
+      held: rows.filter((row) => row.status === "held").length,
+      parcelsPlanned: rows.reduce((sum, row) => sum + row.parcelsPlanned, 0),
+      parcelsLoaded: rows.reduce((sum, row) => sum + row.parcelsLoaded, 0),
+      // Short-loaded departed runs only: planned parcels that never boarded.
+      parcelsLeftBehind: rows.filter((row) => row.status === "departed").reduce((sum, row) => sum + row.parcelsLeftBehind, 0),
+    };
     return run("list_route_runs", args, { serviceDate, rows, totals }, { serviceDate, hubId: args.hubId, status: args.status });
   });
 
@@ -262,7 +269,8 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
     const rows = db.prepare(`SELECT c.id, c.shipper_id shipperId, sh.name shipperName, c.shipment_id shipmentId, c.created_at createdAt, c.category, c.subject, c.status, c.assignee_id assigneeId, c.version
       FROM complaints c JOIN shippers sh ON sh.id = c.shipper_id ${where} ORDER BY c.created_at DESC LIMIT ? OFFSET ?`).all(...params, page.limit, page.offset);
     const byCategory = db.prepare(`SELECT c.category, COUNT(*) complaints, SUM(c.assignee_id IS NULL) unassigned FROM complaints c ${where} GROUP BY c.category ORDER BY complaints DESC`).all(...params);
-    return run("list_complaints", args, { rows, byCategory, page, total }, { ...args, page }, { complete: page.offset + rows.length >= total, limit: page.limit, offset: page.offset, total });
+    const unassigned = (byCategory as Array<{ unassigned: number }>).reduce((sum, row) => sum + Number(row.unassigned ?? 0), 0);
+    return run("list_complaints", args, { rows, byCategory, page, total, totals: { open: total, unassigned } }, { ...args, page }, { complete: page.offset + rows.length >= total, limit: page.limit, offset: page.offset, total });
   });
 
   server.registerTool("list_eligible_assignees", { description: "Employees who can own a complaint.", inputSchema: z.object({ team: z.string().default("customer-care") }) }, (args: any) => {

@@ -4,6 +4,11 @@ import { EntityRefSchema, IsoDateTime, TimeWindowSchema } from "./entities.js";
 export const FindingKindSchema = z.enum(["observation", "hypothesis", "unresolved_question"]);
 export const SeveritySchema = z.enum(["info", "low", "medium", "high", "critical"]);
 
+export const MetricScopeSchema = z.object({
+  type: z.enum(["network", "hub", "shipper", "district", "locker"]),
+  id: z.string().min(1).optional()
+});
+
 export const MetricSchema = z.object({
   name: z.string().min(1),
   value: z.number().finite(),
@@ -11,7 +16,13 @@ export const MetricSchema = z.object({
   aggregation: z.enum(["sum", "count", "rate", "average", "percentile", "distinct_count"]),
   window: TimeWindowSchema.optional(),
   comparisonValue: z.number().finite().optional(),
-  comparisonWindow: TimeWindowSchema.optional()
+  comparisonWindow: TimeWindowSchema.optional(),
+  metricId: z.string().min(1).optional(),
+  scope: MetricScopeSchema.optional(),
+  denominator: z.object({
+    value: z.number().finite(),
+    metricId: z.string().min(1).optional()
+  }).optional()
 });
 
 export const ClaimSchema = z.object({
@@ -41,6 +52,7 @@ export const AgentFindingSchema = z.object({
 });
 
 export type FindingKind = z.infer<typeof FindingKindSchema>;
+export type MetricScope = z.infer<typeof MetricScopeSchema>;
 export type Metric = z.infer<typeof MetricSchema>;
 export type Claim = z.infer<typeof ClaimSchema>;
 export type AgentFinding = z.infer<typeof AgentFindingSchema>;

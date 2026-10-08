@@ -1,0 +1,248 @@
+[
+  {
+    "findingId": "f-equipment",
+    "taskId": "task-network",
+    "agentId": "network",
+    "kind": "observation",
+    "title": "Hyderabad: Sorter belt B fault",
+    "summary": "Sorter belt B down since overnight.",
+    "severity": "high",
+    "entities": [
+      {
+        "type": "hub",
+        "id": "hub-hyd",
+        "label": "Hyderabad Hub"
+      }
+    ],
+    "claims": [
+      {
+        "claimId": "f-equipment-c1",
+        "statement": "Sorter belt B down since overnight.",
+        "evidenceIds": [
+          "ev-f-equipment"
+        ],
+        "resultPaths": [],
+        "metrics": [],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  },
+  {
+    "findingId": "f-waiting",
+    "taskId": "task-network",
+    "agentId": "network",
+    "kind": "observation",
+    "title": "Hyderabad Hub has 595 parcels waiting to sort",
+    "summary": "Sorted 30 in the last hour against a usual 163 per hour.",
+    "severity": "high",
+    "entities": [
+      {
+        "type": "hub",
+        "id": "hub-hyd",
+        "label": "Hyderabad Hub"
+      }
+    ],
+    "claims": [
+      {
+        "claimId": "f-waiting-c1",
+        "statement": "Sorted 30 in the last hour against a usual 163 per hour.",
+        "evidenceIds": [
+          "ev-f-waiting"
+        ],
+        "resultPaths": [
+          "rows.0.parcelsWaitingToSort"
+        ],
+        "metrics": [
+          {
+            "name": "Parcels waiting to sort",
+            "value": 595,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "parcels_waiting_to_sort",
+            "scope": {
+              "type": "hub",
+              "id": "hub-hyd"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  },
+  {
+    "findingId": "f-held",
+    "taskId": "task-network",
+    "agentId": "network",
+    "kind": "observation",
+    "title": "3 route runs held today",
+    "summary": "609 parcels sit on held runs.",
+    "severity": "high",
+    "entities": [],
+    "claims": [
+      {
+        "claimId": "f-held-c1",
+        "statement": "609 parcels sit on held runs.",
+        "evidenceIds": [
+          "ev-f-held"
+        ],
+        "resultPaths": [
+          "totals.held"
+        ],
+        "metrics": [
+          {
+            "name": "Route runs held today",
+            "value": 3,
+            "unit": "runs",
+            "aggregation": "count",
+            "metricId": "route_runs_held_today",
+            "scope": {
+              "type": "network"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  },
+  {
+    "findingId": "f-at-risk",
+    "taskId": "task-shipments",
+    "agentId": "shipments",
+    "kind": "observation",
+    "title": "905 parcels at risk of missing today's promise",
+    "summary": "Promised for delivery today and not yet on a truck, of 4,000 promised.",
+    "severity": "high",
+    "entities": [],
+    "claims": [
+      {
+        "claimId": "f-at-risk-c1",
+        "statement": "Promised for delivery today and not yet on a truck, of 4,000 promised.",
+        "evidenceIds": [
+          "ev-f-at-risk"
+        ],
+        "resultPaths": [
+          "totals.atRisk"
+        ],
+        "metrics": [
+          {
+            "name": "Parcels at risk today",
+            "value": 905,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "parcels_at_risk_today",
+            "scope": {
+              "type": "network"
+            },
+            "denominator": {
+              "value": 4000,
+              "metricId": "parcels_promised_today"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  },
+  {
+    "findingId": "f-shipper",
+    "taskId": "task-customers",
+    "agentId": "customers",
+    "kind": "observation",
+    "title": "Godavari Organics has 218 parcels at risk today",
+    "summary": "Projected on-time would miss the commitment.",
+    "severity": "high",
+    "entities": [
+      {
+        "type": "shipper",
+        "id": "shipper-003",
+        "label": "Godavari Organics"
+      }
+    ],
+    "claims": [
+      {
+        "claimId": "f-shipper-c1",
+        "statement": "Projected on-time would miss the commitment.",
+        "evidenceIds": [
+          "ev-f-shipper"
+        ],
+        "resultPaths": [
+          "rows.0.atRiskToday"
+        ],
+        "metrics": [
+          {
+            "name": "Parcels at risk today",
+            "value": 218,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "parcels_at_risk_today",
+            "scope": {
+              "type": "shipper",
+              "id": "shipper-003"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  },
+  {
+    "findingId": "f-locker",
+    "taskId": "task-last_mile",
+    "agentId": "last_mile",
+    "kind": "observation",
+    "title": "Chennai locker: 64 arrivals with no space",
+    "summary": "Locker pressure for today's inbound.",
+    "severity": "medium",
+    "entities": [],
+    "claims": [
+      {
+        "claimId": "f-locker-c1",
+        "statement": "Locker pressure for today's inbound.",
+        "evidenceIds": [
+          "ev-f-locker"
+        ],
+        "resultPaths": [
+          "rows.0.inboundWithoutSpace"
+        ],
+        "metrics": [
+          {
+            "name": "Inbound without locker space",
+            "value": 64,
+            "unit": "parcels",
+            "aggregation": "count",
+            "metricId": "locker_inbound_without_space",
+            "scope": {
+              "type": "locker",
+              "id": "locker-1"
+            }
+          }
+        ],
+        "entities": [],
+        "limitations": [],
+        "contradictoryEvidenceIds": []
+      }
+    ],
+    "createdAt": "2026-09-21T07:00:00.000+05:30",
+    "limitations": []
+  }
+]

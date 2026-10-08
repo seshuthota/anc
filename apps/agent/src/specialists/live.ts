@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import { z } from "zod";
-import { AgentFindingSchema, ClaimSchema, EntityRefSchema, MetricSchema, type AgentFinding, type Domain, type InvestigationTask, type TaskResult } from "@anc/contracts";
+import { AgentFindingSchema, ClaimSchema, EntityRefSchema, MetricSchema, metricIdForSource, getMetricDefinition, type AgentFinding, type Domain, type InvestigationTask, type Metric, type TaskResult } from "@anc/contracts";
 import type { RuntimeStore } from "@anc/runtime-storage";
 import { resolvePrincipal } from "@anc/policy";
 import { CompanyMcpClient } from "../mcp-client.js";
@@ -58,12 +58,45 @@ A metric is checked against the evidence: give resultPaths pointing at the exact
  * become a metric, but the cited observation is still worth showing. Unknown
  * evidence IDs still reject the finding.
  */
+
+/** Map each metric onto a registry metricId from (tool, resultPath) when possible. */
+function annotateMetrics(store: RuntimeStore, finding: AgentFinding): AgentFinding {
+  return {
+    ...finding,
+    claims: finding.claims.map((claim) => ({
+      ...claim,
+      metrics: claim.metrics.map((metric) => {
+        if (metric.metricId) return metric;
+        for (const evidenceId of claim.evidenceIds) {
+          const evidence = store.getEvidence(evidenceId) as { tool?: string } | undefined;
+          const tool = evidence?.tool;
+          if (!tool) continue;
+          for (const path of claim.resultPaths) {
+            const metricId = metricIdForSource(tool, path);
+            if (!metricId) continue;
+            const def = getMetricDefinition(metricId);
+            const next: Metric = {
+              ...metric,
+              metricId,
+              name: def?.label ?? metric.name,
+              unit: def?.unit ?? metric.unit,
+              scope: metric.scope ?? (def ? { type: def.scopeType } : undefined),
+            };
+            return next;
+          }
+        }
+        return metric;
+      }),
+    })),
+  };
+}
+
 function validated(store: RuntimeStore, finding: AgentFinding): AgentFinding {
   try {
-    return validateFinding(store, finding);
+    return annotateMetrics(store, validateFinding(store, finding));
   } catch (error) {
     if (!(error instanceof Error) || !error.message.startsWith("Numeric claim")) throw error;
-    return validateFinding(store, { ...finding, claims: finding.claims.map((claim) => ({ ...claim, metrics: [], resultPaths: [] })) });
+    return annotateMetrics(store, validateFinding(store, { ...finding, claims: finding.claims.map((claim) => ({ ...claim, metrics: [], resultPaths: [] })) }));
   }
 }
 
