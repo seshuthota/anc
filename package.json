@@ -11,14 +11,11 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
-    "db:seed": "pnpm --filter @anc/database seed",
     "investigate": "pnpm --filter @anc/agent investigate",
     "replay": "pnpm --filter @anc/agent replay",
     "test:e2e": "pnpm --filter @anc/web test:e2e",
-    "eval": "pnpm --filter @anc/agent eval",
-    "eval:live": "pnpm --filter @anc/agent eval:live",
-    "eval:live-fallback": "pnpm --filter @anc/agent eval:live-fallback",
-    "backup": "pnpm --filter @anc/agent backup"
+    "backup": "pnpm --filter @anc/agent backup",
+    "logistics:seed": "pnpm --filter @anc/logistics-db seed"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

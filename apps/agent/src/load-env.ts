@@ -26,7 +26,7 @@ function applyEnvFile(path: string) {
 }
 
 applyEnvFile(resolve(root, ".env"));
-for (const key of ["COMPANY_DB_PATH", "RUNTIME_DB_PATH"]) {
+for (const key of ["LOGISTICS_DB_PATH", "RUNTIME_DB_PATH"]) {
   const value = process.env[key];
   if (value && !isAbsolute(value)) process.env[key] = resolve(root, value);
 }

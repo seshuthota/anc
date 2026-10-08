@@ -20,4 +20,4 @@ export async function runSpecialist(store: RuntimeStore, task: InvestigationTask
   }
 }
 
-export { specialistLabel } from "./fixture.js";
+export { specialistLabel } from "../registry.js";

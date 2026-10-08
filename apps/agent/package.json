@@ -8,9 +8,6 @@
     "start": "tsx src/index.ts",
     "investigate": "tsx src/cli.ts investigate",
     "replay": "tsx src/cli.ts replay",
-    "eval": "tsx src/cli.ts eval",
-    "eval:live": "tsx src/cli.ts eval-live",
-    "eval:live-fallback": "MODEL_EXECUTION_MODE=live-fallback tsx src/cli.ts eval-live",
     "backup": "tsx src/backup-cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
@@ -18,7 +15,8 @@
   "dependencies": {
     "@anc/config": "workspace:*",
     "@anc/contracts": "workspace:*",
-    "@anc/database": "workspace:*",
+    "@anc/logistics-db": "workspace:*",
+    "@anc/logistics-mcp": "workspace:*",
     "@anc/policy": "workspace:*",
     "@anc/runtime-storage": "workspace:*",
     "@langchain/core": "^1.0.1",

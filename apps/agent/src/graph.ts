@@ -3,16 +3,16 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { PRESENTATION_VIEWS, type AgentFinding, type Domain, type EntityRef, type InvestigationTask, type PresentationInput, type SemanticAction, type TaskResult } from "@anc/contracts";
 import type { Principal } from "@anc/policy";
-import { DEMO_OWNER_ID, hasGrant } from "@anc/policy";
+import { hasGrant } from "@anc/policy";
 import { peekSubstitutions } from "./execution.js";
-import { isBroadObjective, proposePlan, validatePlan } from "./planner.js";
-import { resolveExecutionMode } from "./provider.js";
+import { isBroadObjective, MAX_TASKS, proposePlan, validatePlan } from "./planner.js";
+import { synthesize, type Synthesis } from "./synthesis.js";
 import { RuntimeStore } from "@anc/runtime-storage";
 import { validateA2UI } from "./a2ui-validate.js";
 import { recordSubstitution } from "./execution.js";
 import { composeSurface } from "./ui-composer.js";
 import { runSpecialist, specialistLabel } from "./specialists/index.js";
-import { CURRENT } from "./windows.js";
+import { CURRENT, TIMEZONE } from "./windows.js";
 
 export type GraphState = {
   objective: string;
@@ -30,6 +30,7 @@ export type GraphState = {
   surfaceRevision?: number;
   view?: string;
   clarification?: string;
+  synthesis?: Synthesis;
 };
 
 const State = Annotation.Root({
@@ -63,6 +64,7 @@ const State = Annotation.Root({
   surfaceRevision: Annotation<number | undefined>(),
   view: Annotation<string | undefined>(),
   clarification: Annotation<string | undefined>(),
+  synthesis: Annotation<Synthesis | undefined>(),
 });
 
 export type ActivitySink = (message: string, kind?: "agent_started" | "agent_completed" | "tool_queried" | "finding_discovered" | "task_delegated" | "investigation_completed" | "status") => void;
@@ -97,7 +99,7 @@ function task(domain: Domain, question: string, entities: EntityRef[] = [], capa
     domain,
     question,
     entityScope: entities,
-    window: { start: CURRENT.from, end: CURRENT.to, timezone: "UTC", grain: "hour" },
+    window: { start: CURRENT.from, end: CURRENT.to, timezone: TIMEZONE, grain: "hour" },
     dependencies: deps,
     status: "pending",
     attemptCount: 0,
@@ -105,26 +107,19 @@ function task(domain: Domain, question: string, entities: EntityRef[] = [], capa
   };
 }
 
-function affectedFrom(findings: AgentFinding[]): EntityRef[] {
+/** The records the findings are about, carried forward so a follow-up can be scoped to them. */
+function entitiesFrom(findings: AgentFinding[]): EntityRef[] {
   const seen = new Set<string>();
   const entities: EntityRef[] = [];
   for (const finding of findings) {
     for (const entity of finding.entities) {
-      if (entity.type === "customer" && !seen.has(entity.id)) {
-        seen.add(entity.id);
-        entities.push(entity);
-      }
+      const key = `${entity.type}:${entity.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entities.push(entity);
     }
   }
-  return entities;
-}
-
-function releaseFrom(findings: AgentFinding[]): EntityRef | undefined {
-  for (const finding of findings) {
-    const entity = finding.entities.find((item) => item.type === "release");
-    if (entity) return entity;
-  }
-  return undefined;
+  return entities.slice(0, 24);
 }
 
 function ctxOf(state: { runId: string }): GraphContext {
@@ -150,38 +145,8 @@ async function planNode(state: typeof State.State): Promise<Partial<GraphState>>
   const ctx = ctxOf(state);
   await waitForTestDelay(ctx.checkCancelled);
   if (ctx.checkCancelled()) return { status: "cancelled" };
-  const existing = Object.values(state.tasks);
-  if (existing.length) {
-    const customers = affectedFrom(Object.values(state.findings));
-    const hasFinance = existing.some((item) => item.domain === "finance");
-    const canFollowUp = customers.length && !hasFinance && hasGrant(ctx.principal, "cap.finance.arr") && existing.some((item) => item.domain === "reliability") && state.round < 3;
-    if (canFollowUp && resolveExecutionMode() === "fixture") {
-      const question = "Calculate represented ARR for the validated affected-account set.";
-      const exists = existing.some((item) => fingerprint(item.domain, item.question, item.entityScope) === fingerprint("finance", question, customers));
-      if (exists) return { intent: state.intent };
-      const financeTask = task("finance", question, customers, ["cap.finance.arr"]);
-      ctx.emit(`${specialistLabel("finance")} scheduled`, "task_delegated");
-      ctx.store.upsertTask({ id: financeTask.taskId, runId: state.runId, investigationId: state.investigationId, domain: financeTask.domain, question: financeTask.question, status: "pending", payload: financeTask, now: new Date().toISOString() });
-      return { tasks: { [financeTask.taskId]: financeTask }, intent: state.intent, round: state.round + 1 };
-    }
-    if (canFollowUp) {
-      const completed = existing.flatMap((item) => item.capabilities);
-      const plan = await proposePlan({
-        objective: `${state.objective}\nAffected account ids are now known. Add at most one authorized exposure task for that set. Do not repeat completed capabilities.`,
-        principal: ctx.principal,
-        selectedEntities: customers,
-        completedCapabilities: completed,
-        runId: state.runId,
-      });
-      const fresh = plan.tasks.filter((item) => !existing.some((current) => current.domain === item.domain));
-      if (!fresh.length) return { intent: state.intent };
-      const next = task(fresh[0]!.domain, fresh[0]!.question, customers, fresh[0]!.capabilities);
-      ctx.emit(`${specialistLabel(next.domain)} scheduled`, "task_delegated");
-      ctx.store.upsertTask({ id: next.taskId, runId: state.runId, investigationId: state.investigationId, domain: next.domain, question: next.question, status: "pending", payload: next, now: new Date().toISOString() });
-      return { tasks: { [next.taskId]: next }, intent: plan.intent || state.intent, round: state.round + 1 };
-    }
-    return { intent: state.intent };
-  }
+  // One round of work per question: the specialists run once, then the lead analyst connects what they found.
+  if (Object.keys(state.tasks).length) return { intent: state.intent };
   const plan = await proposePlan({
     objective: state.objective,
     action: state.intent ? { name: state.intent } as SemanticAction : undefined,
@@ -221,7 +186,7 @@ async function executeNode(state: typeof State.State): Promise<Partial<GraphStat
   await waitForTestDelay(ctx.checkCancelled);
   if (ctx.checkCancelled()) return { status: "cancelled" };
   const pending = Object.values(state.tasks).filter((item) => item.status === "pending" || item.status === "running");
-  const ready = pending.slice(0, 3);
+  const ready = pending.slice(0, MAX_TASKS);
   const findings: Record<string, AgentFinding> = {};
   const results: Record<string, TaskResult> = {};
   const tasks: Record<string, InvestigationTask> = {};
@@ -230,8 +195,9 @@ async function executeNode(state: typeof State.State): Promise<Partial<GraphStat
     tasks[item.taskId] = running;
     ctx.store.upsertTask({ id: item.taskId, runId: state.runId, investigationId: state.investigationId, domain: item.domain, question: item.question, status: "running", payload: running, now: new Date().toISOString() });
     let result: TaskResult;
-    if (process.env.FORCE_FINANCE_FAILURE === "1" && item.domain === "finance") {
-      result = { taskId: item.taskId, status: "failed", findingIds: [], findings: [], unresolvedQuestions: ["Finance timed out"], suggestedFollowUps: [], error: "Finance timed out" };
+    if (process.env.FORCE_SPECIALIST_FAILURE === item.domain) {
+      // Test hook: one specialist times out so the others' work can be shown without it.
+      result = { taskId: item.taskId, status: "failed", findingIds: [], findings: [], unresolvedQuestions: ["Timed out"], suggestedFollowUps: [], error: "Timed out" };
     } else {
       try {
         result = await runSpecialist(ctx.store, running, state.runId, ctx.principal.id);
@@ -256,7 +222,7 @@ async function executeNode(state: typeof State.State): Promise<Partial<GraphStat
   ctx.store.claimArtifacts(state.runId, state.threadId, ctx.principal.id);
   const mergedFindings = { ...state.findings, ...findings };
   noteContradictions(Object.values(mergedFindings), ctx);
-  return { tasks, results, findings, selectedEntities: affectedFrom(Object.values(mergedFindings)) };
+  return { tasks, results, findings, selectedEntities: entitiesFrom(Object.values(mergedFindings)) };
 }
 
 function noteContradictions(findings: AgentFinding[], ctx: GraphContext) {
@@ -284,8 +250,6 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   if (ctx.checkCancelled()) return { status: "cancelled" };
   const findings = Object.values(state.findings);
   const failedDomains = [...new Set(Object.values(state.tasks).filter((item) => item.status === "failed").map((item) => item.domain))];
-  const failedFinance = failedDomains.includes("finance")
-    || Object.values(state.results).some((result) => result.taskId.includes("finance") && result.status === "failed");
   const listed = ctx.store.listArtifacts(state.threadId, ctx.principal.id);
   const current = listed.filter((item) => item.runId === state.runId);
   // Earlier runs' artifacts are only for re-presenting them (a table toggle, a
@@ -293,22 +257,7 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   // so an older table cannot title or pad a new answer.
   const didWork = Object.keys(state.tasks).length > 0;
   const artifacts = didWork ? current : [...current, ...listed.filter((item) => item.runId !== state.runId)];
-  if (state.intent === "draft" && !artifacts.some((item) => item.kind === "draft")) {
-    const draft = buildDraft(state, findings);
-    if (draft) {
-      ctx.store.saveArtifact({
-        id: `artifact-draft-${state.investigationId}`,
-        threadId: state.threadId,
-        runId: state.runId,
-        ownerId: ctx.principal.id,
-        kind: "draft",
-        payload: draft,
-        now: new Date().toISOString(),
-      });
-      artifacts.push({ id: `artifact-draft-${state.investigationId}`, kind: "draft", payload: draft, runId: state.runId });
-    }
-  }
-  const presentation = toPresentation(state.intent, state.objective, findings, failedFinance, failedDomains, artifacts, state.view, state.clarification);
+  const presentation = toPresentation({ intent: state.intent, objective: state.objective, findings, failedDomains, artifacts, view: state.view, clarification: state.clarification, synthesis: state.synthesis, principal: ctx.principal });
   const surfaceId = `surface-${state.investigationId}`;
   const revision = (state.surfaceRevision ?? 0) + 1;
   ctx.emit("UI Composer is designing the workspace", "status");
@@ -321,6 +270,7 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   if (composed.reason) {
     // Not silent: a rejected model layout is reported and counted like any other substitution.
     ctx.emit("UI Composer layout was rejected; showing the standard layout", "status");
+    console.warn(`UI Composer layout rejected: ${composed.reason}`);
     recordSubstitution(state.runId, "ui-composer", composed.reason);
   }
   const invalid = validateA2UI(composed.messages);
@@ -356,34 +306,26 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
 }
 
 /**
- * Builds a model-authored onboarding checklist from retrieved account context.
- * The steps are a proposed starting point, and every unverified premise is
- * listed as an assumption rather than being presented as fact.
+ * The lead analyst reads every specialist's findings together and states how
+ * they connect. Specialists never see each other's work, so this is the only
+ * place a cause in one part of the network is tied to its effects in another.
  */
-function buildDraft(state: GraphState, findings: AgentFinding[]) {
-  const customers = affectedFrom(findings);
-  const account = customers[0];
-  const name = account?.label ?? account?.id;
-  if (!name) return undefined;
-  const hasSubscription = findings.some((finding) => finding.claims.some((claim) => claim.metrics.some((metric) => /arr|subscription|invoice/i.test(metric.name))));
-  const hasTickets = findings.some((finding) => /ticket|escalation|support/i.test(finding.title));
-  return {
-    id: `draft-${state.investigationId}`,
-    title: `Onboarding checklist for ${name}`,
-    steps: [
-      { id: "context", text: `Confirm the current subscription and billing contact for ${name}.` },
-      { id: "usage", text: "Review which collaboration features the account has actually used." },
-      { id: "risks", text: hasTickets ? "Review open support history before scheduling enablement." : "Confirm there is no open support history that would delay enablement." },
-      { id: "session", text: "Schedule a first-run enablement session with the account's admin." },
-      { id: "checkpoint", text: "Set a 30-day success checkpoint with named success criteria." },
-    ],
-    assumptions: [
-      "An onboarding owner has not been assigned yet; this draft does not assign one.",
-      hasSubscription ? "Billing context was available in the retrieved records." : "Billing context was not part of the retrieved records and was not assumed.",
-      "The account timezone is UTC unless its record states otherwise.",
-    ],
-    status: "proposed" as const,
-  };
+async function synthesizeNode(state: typeof State.State): Promise<Partial<GraphState>> {
+  const ctx = ctxOf(state);
+  if (ctx.checkCancelled()) return { status: "cancelled" };
+  const findings = Object.values(state.findings);
+  if (findings.length < 2) return {};
+  const audience = `${ctx.principal.title}. ${ctx.principal.preferences.roleDescription} Cares about: ${ctx.principal.preferences.priorities.join(", ")}.`;
+  const outcome = await synthesize({ objective: state.objective, audience, findings, runId: state.runId });
+  if (outcome.synthesis) {
+    ctx.emit(`Lead Analyst connected the findings: ${outcome.synthesis.headline}`, "finding_discovered");
+    return { synthesis: outcome.synthesis };
+  }
+  if (outcome.reason) {
+    ctx.emit("Lead Analyst could not connect the findings; showing them side by side", "status");
+    recordSubstitution(state.runId, "lead-analyst", outcome.reason);
+  }
+  return {};
 }
 
 function routeAfterPlan(state: typeof State.State): "execute" | "compose" | typeof END {  if (state.status === "cancelled") return END;
@@ -391,24 +333,22 @@ function routeAfterPlan(state: typeof State.State): "execute" | "compose" | type
   return pending.length ? "execute" : "compose";
 }
 
-function routeAfterExecute(state: typeof State.State): "plan" | "compose" | typeof END {
+function routeAfterExecute(state: typeof State.State): "plan" | "synthesize" | typeof END {
   if (state.status === "cancelled") return END;
-  const customers = affectedFrom(Object.values(state.findings));
-  const hasFinance = Object.values(state.tasks).some((item) => item.domain === "finance");
   const pending = Object.values(state.tasks).filter((item) => item.status === "pending");
-  if (pending.length) return "plan";
-  if (customers.length && !hasFinance && state.round < 3 && Object.values(state.tasks).some((item) => item.domain === "reliability")) return "plan";
-  return "compose";
+  return pending.length ? "plan" : "synthesize";
 }
 
 export function createInvestigationGraph(checkpointer: SqliteSaver) {
   const graph = new StateGraph(State)
     .addNode("plan", planNode)
     .addNode("execute", executeNode)
+    .addNode("synthesize", synthesizeNode)
     .addNode("compose", composeNode)
     .addEdge(START, "plan")
     .addConditionalEdges("plan", routeAfterPlan, { execute: "execute", compose: "compose", [END]: END })
-    .addConditionalEdges("execute", routeAfterExecute, { plan: "plan", compose: "compose", [END]: END })
+    .addConditionalEdges("execute", routeAfterExecute, { plan: "plan", synthesize: "synthesize", [END]: END })
+    .addEdge("synthesize", "compose")
     .addEdge("compose", END);
   return graph.compile({ checkpointer });
 }
@@ -417,63 +357,51 @@ export function incrementRound(state: GraphState): GraphState {
   return { ...state, round: state.round + 1 };
 }
 
-export function toPresentation(
-  intent: string,
-  objective: string,
-  findings: AgentFinding[],
-  financeFailed = false,
-  failedDomains: Domain[] = [],
-  artifacts: Array<{ id: string; kind: string; payload: unknown }> = [],
-  view?: string,
-  clarification?: string,
-): PresentationInput {
-  const customers = affectedFrom(findings);
-  const question = clarification ?? (intent === "clarification"
-    ? "A detail is needed before this can be answered."
-    : undefined);
+type PresentationSource = {
+  intent: string;
+  objective: string;
+  findings: AgentFinding[];
+  failedDomains?: Domain[];
+  artifacts?: Array<{ id: string; kind: string; payload: unknown }>;
+  view?: string;
+  clarification?: string;
+  synthesis?: Synthesis;
+  principal?: Principal;
+};
+
+const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
+
+/**
+ * Turns verified findings, tool-built tables and charts, and the lead analyst's
+ * synthesis into the data a surface is composed from. Everything here comes
+ * from stored evidence or checked findings; nothing is authored at this step.
+ */
+export function toPresentation(source: PresentationSource): PresentationInput {
+  const { intent, objective, failedDomains = [], artifacts = [], view, clarification, synthesis, principal } = source;
+  const findings = [...source.findings].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
+  const question = clarification ?? (intent === "clarification" ? "A detail is needed before this can be answered." : undefined);
   if (question) {
-    return {
-      title: "One detail is needed",
-      subtitle: question,
-      view: "summary",
-      metrics: [],
-      findings: [],
-      actions: [],
-      limitations: ["Answering now would mean guessing. Nothing has been assumed on your behalf."],
-    };
+    return { title: "One detail is needed", subtitle: question, view: "summary", metrics: [], findings: [], actions: [], limitations: ["Answering now would mean guessing. Nothing has been assumed on your behalf."] };
   }
+  if (intent === "unsupported") {
+    return { title: "Not available", subtitle: "This workspace cannot complete that request with the access you have.", view: "summary", metrics: [], findings: [], actions: [], limitations: ["Nothing was made up to fill the gap. Ask about hubs, parcels, lockers, shippers or complaints."] };
+  }
+  const unavailable = failedDomains.map((domain) => `${specialistLabel(domain)} could not complete its part, so that part is missing.`);
   if (!findings.length && failedDomains.length) {
-    return {
-      title: "Incomplete answer",
-      subtitle: "One or more specialists could not complete this question.",
-      view: "summary",
-      metrics: [],
-      findings: [],
-      actions: [],
-      limitations: failedDomains.map((domain) => `${specialistLabel(domain)} results are unavailable for this run.`),
-    };
+    return { title: "Incomplete answer", subtitle: "The specialists could not complete this question.", view: "summary", metrics: [], findings: [], actions: [], limitations: unavailable };
   }
-  const release = releaseFrom(findings);
-  const metrics = findings.flatMap((finding) => finding.claims.flatMap((claim) => claim.metrics.map((metric) => {
+
+  const metrics = findings.flatMap((finding) => finding.claims.flatMap((claim) => claim.metrics.flatMap((metric) => {
     const evidenceId = claim.evidenceIds[0];
     if (!evidenceId) return [];
-    let value = String(metric.value);
-    if (metric.unit === "ratio") value = `${(metric.value * 100).toFixed(1)}%`;
-    if (metric.unit === "percent") value = `${metric.value.toFixed(0)}%`;
-    if (metric.unit === "minor_units") value = `$${(metric.value / 100 / 1_000_000).toFixed(1)}M`;
-    // A model names units loosely ("USD minor units", "cents"); never show raw minor units as a figure.
-    else if (/minor|cents/i.test(metric.unit)) value = `$${(metric.value / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-    else if (metric.unit === "count" || Number.isInteger(metric.value)) value = metric.value.toLocaleString("en-US");
-    return [{
-      id: `${finding.findingId}-${metric.name}`,
-      label: metric.name.replaceAll("_", " "),
-      value,
-      detail: evidenceId,
-      evidenceId,
-      tone: (metric.unit === "ratio" && metric.value >= 0.05) || (metric.unit === "percent" && metric.value <= -10) ? "danger" as const : "neutral" as const,
-    }];
-  }))).flat();
+    const ratio = /ratio|rate|percent|share/i.test(metric.unit) && metric.value >= 0 && metric.value <= 1;
+    const percent = /percent/i.test(metric.unit) && metric.value > 1;
+    const value = ratio ? `${(metric.value * 100).toFixed(1)}%` : percent ? `${metric.value.toFixed(1)}%` : metric.value.toLocaleString("en-IN", { maximumFractionDigits: 1 });
+    return [{ id: `${finding.findingId}-${metric.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"), label: metric.name.replaceAll("_", " "), value, detail: /ratio|rate|percent|count/i.test(metric.unit) ? undefined : metric.unit, evidenceId, tone: finding.severity === "high" || finding.severity === "critical" ? "danger" as const : "neutral" as const }];
+  // Two claims can name the same figure; show it once, and keep ids unique for the surface.
+  }))).filter((metric, index, all) => all.findIndex((other) => other.id === metric.id || (other.label === metric.label && other.value === metric.value)) === index);
 
+  const evidenceOf = (ids: string[]) => [...new Set(findings.filter((finding) => ids.includes(finding.findingId)).flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds)))];
   const presentationFindings = findings.map((finding) => ({
     id: finding.findingId,
     title: finding.title,
@@ -483,171 +411,72 @@ export function toPresentation(
     evidenceIds: finding.claims.flatMap((claim) => claim.evidenceIds),
   }));
 
-  const tableArtifact = artifacts.find((item) => item.kind === "comparison" || item.kind === "queue" || item.kind === "table");
+  const tableArtifact = artifacts.find((item) => item.kind === "table");
   const tablePayload = tableArtifact?.payload as {
-    title?: string;
-    columns?: string[];
+    title?: string; columns?: string[]; totals?: string[]; completeness?: "complete" | "partial" | "empty";
     rows?: Array<{ id: string; cells: string[]; sortValues?: number[]; entityType?: string; entityId?: string; actionName?: string }>;
     rowAction?: { name: string; label?: string };
-    totals?: string[];
-    completeness?: "complete" | "partial" | "empty";
   } | undefined;
-
   const seriesArtifact = artifacts.find((item) => item.kind === "series");
-  const seriesPayload = seriesArtifact?.payload as {
-    title?: string;
-    unit?: string;
-    points?: Array<{ label: string; value: number }>;
-  } | undefined;
-  const seriesPoints = seriesPayload?.points ?? [];
+  const seriesPayload = seriesArtifact?.payload as { title?: string; unit?: string; points?: Array<{ label: string; value: number }> } | undefined;
+  const points = seriesPayload?.points ?? [];
 
-  const draftArtifact = artifacts.find((item) => item.kind === "draft");
-  const draftPayload = draftArtifact?.payload as {
-    id?: string;
-    title?: string;
-    steps?: Array<{ id: string; text: string; done?: boolean }>;
-    assumptions?: string[];
-    status?: "proposed" | "edited" | "confirmed";
-  } | undefined;
-
-  if (intent === "unsupported") {
-    return {
-      title: "Not available",
-      subtitle: "This workspace cannot complete that request with the current capabilities and permissions.",
-      view: "summary",
-      metrics: [],
-      findings: [],
-      actions: [],
-      limitations: ["No fabricated success. Ask a supported operations, finance, or support question."],
-    };
-  }
-
-  const wantsTable = view === "table" || view === "queue" || view === "comparison" || Boolean(tablePayload);
-  const synthesized = !tablePayload && wantsTable && customers.length
-    ? customers.map((entity) => ({
-      id: entity.id,
-      cells: [entity.label ?? entity.id, entity.id],
-      entityType: "customer",
-      entityId: entity.id,
-      actionName: "inspect_account",
-    }))
-    : [];
-  const rows = (tablePayload?.rows ?? synthesized).map((row) => ({
-    ...row,
-    actionName: row.actionName ?? tablePayload?.rowAction?.name ?? actionNameFor(row.entityType),
-  }));
-  const resolvedView = resolveView(view, { hasTable: rows.length > 0, hasChart: seriesPoints.length >= 2, hasDraft: Boolean(draftPayload), hasForm: intent === "prepare_assignment" || intent === "commit_assignment" });
-  const quiet = !findings.some((finding) => finding.severity === "high" || finding.severity === "critical");
   const broad = isBroadObjective(objective);
-  // A summary spans several domains, so one table's name is not its title.
-  const title = (view === "summary" ? "" : tablePayload?.title)
-    || (rows.length && !broad ? (presentationFindings[0]?.title ?? "Results") : "")
-    || (release && !broad ? release.id : "")
-    || (customers.length === 1 && !broad ? (customers[0]?.label ?? customers[0]?.id ?? "Account") : "")
-    || (broad ? "Morning overview" : (presentationFindings[0]?.title ?? "Results"));
-  const subtitle = view === "table" && tablePayload && !findings.length
-    ? "Same records as the previous view, shown as a table."
-    : quiet
-      ? "No major supported anomaly was verified in the current window."
-      : (presentationFindings[0]?.body ?? "Records from authorized tools.");
-  const actions = followUpActions(rows, tablePayload?.rowAction, customers, release);
-  const numericColumn = tablePayload?.columns?.findIndex((column) => /amount|arr|minor|error|rate|count|days/i.test(column)) ?? -1;
+  // A row can be acted on only by someone allowed to; otherwise the table is read-only.
+  const rowAction = tablePayload?.rowAction && (!principal || hasGrant(principal, "cap.complaints.assign")) ? tablePayload.rowAction : undefined;
+  const rows = (tablePayload?.rows ?? []).map((row) => ({ ...row, actionName: rowAction?.name }));
+  const resolvedView = resolveView(view, { hasTable: rows.length > 0, hasChart: points.length >= 2, hasForm: intent === "prepare_assignment" || intent === "commit_assignment" });
+  const quiet = !findings.some((finding) => finding.severity === "high" || finding.severity === "critical");
+  const single = resolvedView !== "summary" && !synthesis;
+  const title = synthesis?.headline
+    ?? (single && tablePayload?.title ? tablePayload.title.split(":")[0]! : undefined)
+    ?? (broad ? (quiet ? "Nothing needs your attention this morning" : "This morning") : (presentationFindings[0]?.title ?? "Results"));
+  const subtitle = quiet && broad ? "The network is running to plan as far as the specialists could see." : (presentationFindings[0]?.body ?? "Records from the company's systems.");
+  const numericColumn = rows[0]?.sortValues?.findIndex((value) => Number.isFinite(value)) ?? -1;
 
   return {
     title,
     subtitle,
     view: resolvedView,
-    metrics: resolvedView === "table" ? [] : metrics.slice(0, broad ? 3 : 4),
-    findings: presentationFindings,
-    chart: seriesPoints.length >= 2 ? {
-      id: seriesArtifact!.id,
-      title: seriesPayload?.title ?? "Service trend",
-      unit: seriesPayload?.unit === "ratio" ? "error rate" : (seriesPayload?.unit ?? "count"),
-      points: seriesPoints,
-      caption: "Bucketed from authorized telemetry. Each point is an aggregate, not a single request.",
+    synthesis: synthesis ? {
+      headline: synthesis.headline,
+      steps: synthesis.steps.map((step) => ({ ...step, evidenceIds: evidenceOf(step.findingIds) })),
+      separate: synthesis.separate.map((item) => ({ ...item, evidenceIds: evidenceOf(item.findingIds) })),
     } : undefined,
-    table: rows.length && wantsTable ? {
-      id: tableArtifact?.id ?? "records",
-      columns: tablePayload?.columns ?? ["Account", "ID"],
+    metrics: resolvedView === "table" ? [] : metrics.slice(0, 4),
+    findings: presentationFindings,
+    chart: points.length >= 2 ? {
+      id: seriesArtifact!.id,
+      title: seriesPayload?.title ?? "Trend",
+      unit: seriesPayload?.unit ?? "",
+      points,
+      caption: "Each point is a total from the company's records, not a single parcel.",
+    } : undefined,
+    table: rows.length ? {
+      id: tableArtifact!.id,
+      columns: tablePayload?.columns ?? [],
       rows,
       totals: tablePayload?.totals,
-      completeness: tablePayload?.completeness ?? (rows.length >= 25 ? "partial" : "complete"),
+      completeness: tablePayload?.completeness ?? "complete",
       defaultSort: resolvedView === "comparison" && numericColumn >= 0 ? numericColumn : 0,
     } : undefined,
-    draft: draftPayload?.steps?.length ? {
-      id: draftPayload.id ?? draftArtifact!.id,
-      title: draftPayload.title ?? "Proposed draft",
-      steps: draftPayload.steps,
-      assumptions: draftPayload.assumptions ?? [],
-      status: draftPayload.status ?? "proposed",
-    } : undefined,
-    selection: resolvedView === "comparison" && rows.length > 1 ? {
-      id: `${tableArtifact?.id ?? "records"}-selection`,
-      label: "Narrow this comparison to selected accounts",
-      options: rows.slice(0, 12).map((row) => ({ id: row.entityId ?? row.id, label: String(row.cells[0] ?? row.id) })),
-      selected: customers.slice(0, 1).map((entity) => entity.id),
-    } : undefined,
-    actions,
+    actions: [],
     limitations: [
-      financeFailed ? "Financial information is unavailable for this run." : "",
-      broad ? "Root cause is not confirmed." : "",
-      draftPayload ? "The draft below is model-authored. It is not an observed fact and nothing has been executed." : "",
+      ...unavailable,
+      synthesis?.steps.some((step) => step.kind === "inferred") ? "Links marked as inferred are the analyst's reasoning across findings, not something a system recorded." : "",
       objective && !broad ? `Question: ${objective}` : "",
     ].filter(Boolean),
   };
 }
 
 /**
- * Chooses the layout. The planner's `view` wins when it names a supported one;
- * otherwise the shape of the available artifacts decides, so a new capability
- * still composes into a sensible surface without a planner branch.
+ * Chooses the layout. The planner's view wins when it names a supported one;
+ * otherwise the shape of what was found decides.
  */
-function resolveView(
-  view: string | undefined,
-  available: { hasTable: boolean; hasChart: boolean; hasDraft: boolean; hasForm: boolean },
-): PresentationInput["view"] {
-  if (view && (PRESENTATION_VIEWS as readonly string[]).includes(view)) return view as PresentationInput["view"];
+function resolveView(view: string | undefined, available: { hasTable: boolean; hasChart: boolean; hasForm: boolean }): PresentationInput["view"] {
   if (available.hasForm) return "form";
-  if (available.hasDraft) return "form";
+  if (view && (PRESENTATION_VIEWS as readonly string[]).includes(view)) return view as PresentationInput["view"];
   if (available.hasChart) return "trend";
   if (available.hasTable) return "table";
   return "summary";
-}
-
-function actionNameFor(entityType?: string): string {
-  if (entityType === "release") return "inspect_release";
-  if (entityType === "customer") return "inspect_account";
-  return "show_evidence";
-}
-
-function followUpActions(
-  rows: Array<{ id: string; entityType?: string; entityId?: string }>,
-  rowAction: { name: string; label?: string } | undefined,
-  customers: EntityRef[],
-  release: EntityRef | undefined,
-): PresentationInput["actions"] {
-  if (rowAction && rows[0]) {
-    const row = rows[0];
-    return [{
-      id: `${rowAction.name}-${row.id}`,
-      label: rowAction.label ?? `${rowAction.name} ${row.id}`,
-      name: rowAction.name,
-      entities: [{ type: row.entityType ?? "record", id: row.entityId ?? row.id }],
-    }];
-  }
-  const actions: PresentationInput["actions"] = [];
-  if (customers.length > 1) {
-    actions.push({ id: "accounts", label: "Show affected accounts", name: "show_affected_accounts", entities: customers });
-  }
-  if (release) {
-    actions.push({ id: "release", label: "Inspect release", name: "inspect_release", entities: [release] });
-  }
-  if (customers.length) {
-    actions.push({ id: "finance", label: "Inspect financial impact", name: "inspect_financial_impact", entities: customers.slice(0, 1) });
-  }
-  if (customers.length === 1) {
-    const entity = customers[0]!;
-    actions.push({ id: `inspect-${entity.id}`, label: `Inspect ${entity.label ?? entity.id}`, name: "inspect_account", entities: [entity] });
-  }
-  return actions.slice(0, 3);
 }

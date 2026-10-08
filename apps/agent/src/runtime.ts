@@ -1,7 +1,7 @@
 import "./load-env.js";
 import { randomUUID } from "node:crypto";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
-import { SemanticActionSchema, type EntityRef, type SemanticAction } from "@anc/contracts";
+import { EntityRefSchema, SemanticActionSchema, type EntityRef, type SemanticAction } from "@anc/contracts";
 import { DEFAULT_RUNTIME_DB_PATH, openRuntimeDatabase, RuntimeStore } from "@anc/runtime-storage";
 import { peekSubstitutions, takeSubstitutions, type SpecialistSubstitution } from "./execution.js";
 import { publishEvent } from "./events.js";
@@ -11,7 +11,7 @@ import { validateA2UI } from "./a2ui-validate.js";
 import { resolveExecutionMode, resolveModelConfig } from "./provider.js";
 import { assertUsdBudgetCanBeEnforced, priceCost, takeUsage, type ModelUsage } from "./usage.js";
 import { DEMO_OWNER_ID, redactForPrincipal, resolvePrincipal, sessionThreadId, withoutGrants, type Principal } from "@anc/policy";
-import { commitTicketAssignment, prepareTicketAssignment } from "./operations.js";
+import { commitComplaintAssignment, prepareComplaintAssignment, selectComplaintAssignee } from "./operations.js";
 import { DEFAULT_THREAD_ID } from "./windows.js";
 
 const db = openRuntimeDatabase(process.env.RUNTIME_DB_PATH ?? DEFAULT_RUNTIME_DB_PATH);
@@ -58,28 +58,9 @@ function principalNow(ownerId: string): Principal {
   return withoutGrants(resolvePrincipal(ownerId), store.listRevocations(ownerId));
 }
 
-function inferredGrants(value: unknown): string[] {
-  const keys = new Set<string>();
-  const walk = (node: unknown) => {
-    if (!node || typeof node !== "object") return;
-    if (Array.isArray(node)) {
-      node.forEach(walk);
-      return;
-    }
-    for (const [key, nested] of Object.entries(node as Record<string, unknown>)) {
-      keys.add(key);
-      walk(nested);
-    }
-  };
-  walk(value);
-  return ["arrMinorUnits", "arr_minor_units", "amountMinorUnits", "amount_minor_units"].some((key) => keys.has(key))
-    ? ["cap.finance.arr", "cap.finance.invoices"]
-    : [];
-}
-
 function visibleSurface(surface: NonNullable<ReturnType<typeof store.getSurface>>, ownerId: string) {
   const principal = principalNow(ownerId);
-  const required = surface.requiredGrants.length ? surface.requiredGrants : inferredGrants(surface.dataModel);
+  const required = surface.requiredGrants;
   if (required.some((grant) => !principal.grants.includes(grant))) {
     return {
       surfaceId: surface.surfaceId,
@@ -365,12 +346,12 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
     return { ...publicState(threadId, principal.id), evidence: evidenceId ? store.getEvidence(evidenceId, principal.id) ?? { error: "not authorized" } : null } as PublicState;
   }
   if (action.name === "prepare_assignment") {
-    const ticketId = String(action.entities[0]?.id ?? action.parameters.ticketId ?? action.parameters.entityId ?? "");
-    await prepareTicketAssignment({ store, principal, threadId, ticketId });
+    const complaintId = String(action.entities[0]?.id ?? action.parameters.entityId ?? action.parameters.rowId ?? "");
+    await prepareComplaintAssignment({ store, principal, threadId, complaintId });
     return publicState(threadId, principal.id);
   }
   if (action.name === "commit_assignment") {
-    await commitTicketAssignment({
+    await commitComplaintAssignment({
       store,
       principal,
       threadId,
@@ -380,30 +361,16 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
     return publicState(threadId, principal.id);
   }
   if (action.name === "select_assignee") {
-    return current;
+    selectComplaintAssignee({ store, principal, threadId, proposalId: String(action.parameters.proposalId ?? ""), assigneeId: String(action.parameters.assigneeId ?? "") });
+    return publicState(threadId, principal.id);
   }
   if (action.name === "set_selection") {
     return applySelection({ threadId, principal, action });
   }
-  if (action.name === "save_draft") {
-    return saveDraftEdits({ threadId, principal, action, current });
-  }
-  const question = action.name === "show_affected_accounts"
-    ? "Who is affected?"
-    : action.name === "inspect_release"
-      ? "Inspect the temporally relevant release."
-      : action.name === "inspect_account"
-        ? `Inspect account ${action.entities[0]?.id ?? action.parameters.entityId ?? ""}`
-        : action.name === "inspect_financial_impact"
-          ? "What ARR is represented by the affected accounts?"
-          : action.name === "show_as_table"
-            ? "Show this as a table"
-            : "Investigate the current findings.";
-  const entities = action.entities.length
-    ? action.entities
-    : action.parameters.entityId
-      ? [{ type: "customer" as const, id: String(action.parameters.entityId) }]
-      : (current.selectedEntities as EntityRef[]);
+  // A follow-up carries its own question; anything else continues the current one.
+  const asked = typeof action.parameters.question === "string" ? action.parameters.question.trim().slice(0, 300) : "";
+  const question = action.name === "show_as_table" ? "Show this as a table" : asked || "Look further into the current findings.";
+  const entities = action.entities.length ? action.entities : (current.selectedEntities as EntityRef[]);
   return runInvestigation({
     question,
     threadId,
@@ -420,7 +387,9 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
  */
 async function applySelection(input: { threadId: string; principal: Principal; action: SemanticAction }): Promise<PublicState> {
   const selected = Array.isArray(input.action.parameters.selected) ? input.action.parameters.selected.map(String) : [];
-  const entities: EntityRef[] = selected.map((id) => ({ type: "customer" as const, id }));
+  // The selection group is named after the kind of record its options are.
+  const type = EntityRefSchema.shape.type.safeParse(input.action.parameters.entityType).data ?? "shipper";
+  const entities: EntityRef[] = selected.map((id) => ({ type, id }));
   store.setThreadState({
     threadId: input.threadId,
     selectedEntities: entities,
@@ -444,73 +413,4 @@ async function applySelection(input: { threadId: string; principal: Principal; a
     principal: input.principal,
     entities,
   });
-}
-
-/**
- * Persists user edits to a model-authored draft. Edits are stored as an
- * `edited` draft rather than promoted to an observed finding, and a draft is
- * never treated as an executed operation.
- */
-function saveDraftEdits(input: { threadId: string; principal: Principal; action: SemanticAction; current: PublicState }): PublicState {
-  const draftId = String(input.action.parameters.draftId ?? "");
-  const artifacts = store.listArtifacts(input.threadId, input.principal.id);
-  const artifact = artifacts.find((item) => item.kind === "draft" && (item.id === draftId || String((item.payload as { id?: string })?.id) === draftId));
-  if (!artifact) throw new Error("Draft not found");
-  const payload = artifact.payload as { id: string; title: string; steps: Array<{ id: string; text: string; done?: boolean }>; assumptions: string[] };
-  const clientFields = (input.action.parameters.clientFields ?? {}) as Record<string, string>;
-  const clientSelections = (input.action.parameters.clientSelections ?? {}) as Record<string, string[]>;
-  const completed = new Set(clientSelections[draftId] ?? clientSelections[payload.id] ?? []);
-  const steps = payload.steps.map((step) => {
-    const edited = clientFields[`draft_text_${step.id}`];
-    return { ...step, text: typeof edited === "string" && edited.trim() ? edited : step.text, done: completed.has(step.id) || step.done };
-  });
-  const next = { ...payload, steps, status: "edited" as const };
-  store.saveArtifact({
-    id: artifact.id,
-    threadId: input.threadId,
-    runId: artifact.runId ?? undefined,
-    ownerId: input.principal.id,
-    kind: "draft",
-    payload: next,
-    now: new Date().toISOString(),
-  });
-  store.appendActivity({
-    id: randomUUID(),
-    threadId: input.threadId,
-    message: `Saved edits to draft ${payload.title}`,
-    kind: "action",
-    now: new Date().toISOString(),
-    ownerId: input.principal.id,
-  });
-  const state = publicState(input.threadId, input.principal.id);
-  const surface = state.surface;
-  if (!surface) return state;
-  const stored = store.getSurface(surface.surfaceId, surface.revision);
-  if (!stored) return state;
-  const presentation = toPresentation(
-    String((surface.dataModel as { view?: string })?.view ?? "form"),
-    "Saved draft",
-    [],
-    false,
-    [],
-    store.listArtifacts(input.threadId, input.principal.id),
-    "form",
-  );
-  const composed = composeA2UI(surface.surfaceId, presentation);
-  if (validateA2UI(composed.messages).length) return state;
-  store.saveSurface({
-    surfaceId: surface.surfaceId,
-    revision: surface.revision + 1,
-    threadId: input.threadId,
-    investigationId: stored.investigationId,
-    runId: state.runId ?? undefined,
-    ownerId: input.principal.id,
-    title: presentation.title,
-    messages: composed.messages,
-    dataModel: composed.dataModel,
-    findingIds: stored.findingIds,
-    requiredGrants: stored.requiredGrants,
-    now: new Date().toISOString(),
-  });
-  return publicState(input.threadId, input.principal.id);
 }

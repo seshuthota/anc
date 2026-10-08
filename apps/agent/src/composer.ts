@@ -22,20 +22,32 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
   const components: Component[] = [];
   const rootChildren: string[] = ["header"];
 
-  components.push({ id: "header", component: "Column", children: ["title", "subtitle"] });
+  // With a connected account, the headline is followed by the account itself, not by one finding's detail.
+  components.push({ id: "header", component: "Column", children: presentation.synthesis ? ["title"] : ["title", "subtitle"] });
   components.push({ id: "title", component: "Text", text: { path: "/title" }, variant: "h2" });
   components.push({ id: "subtitle", component: "Text", text: { path: "/subtitle" } });
+
+  if (presentation.synthesis) {
+    // The connected account leads; individual findings follow as its support.
+    const { steps, separate } = presentation.synthesis;
+    rootChildren.push("story");
+    components.push({ id: "story", component: "Column", children: ["story_chain", ...(separate.length ? ["story_separate_label", ...separate.map((item) => `story_${item.id}`)] : [])] });
+    components.push({ id: "story_chain", component: "Sequence", children: steps.map((step) => `story_${step.id}_stop`) });
+    for (const step of steps) {
+      components.push({ id: `story_${step.id}_stop`, component: "Column", children: [`story_${step.id}`, `story_${step.id}_kind`] });
+      components.push({ id: `story_${step.id}`, component: "Text", text: { path: `/synthesis/steps/${step.id}/text` } });
+      components.push({ id: `story_${step.id}_kind`, component: "Text", text: { path: `/synthesis/steps/${step.id}/kindLabel` }, variant: "caption" });
+    }
+    if (separate.length) components.push({ id: "story_separate_label", component: "Text", text: "Separate from this", variant: "h4" });
+    for (const item of separate) components.push({ id: `story_${item.id}`, component: "Text", text: { path: `/synthesis/separate/${item.id}/text` } });
+  }
 
   const showMetrics = view !== "table" && view !== "form" && presentation.metrics.length > 0;
   if (showMetrics) {
     rootChildren.push("metrics_row");
     components.push({ id: "metrics_row", component: "Row", children: presentation.metrics.map((metric) => `metric_${metric.id}`) });
     for (const metric of presentation.metrics) {
-      components.push({ id: `metric_${metric.id}`, component: "Card", child: `metric_${metric.id}_col` });
-      components.push({ id: `metric_${metric.id}_col`, component: "Column", children: [`metric_${metric.id}_label`, `metric_${metric.id}_value`, `metric_${metric.id}_detail`] });
-      components.push({ id: `metric_${metric.id}_label`, component: "Text", text: { path: `/metrics/${metric.id}/label` }, variant: "caption" });
-      components.push({ id: `metric_${metric.id}_value`, component: "Text", text: { path: `/metrics/${metric.id}/value` }, variant: "h3" });
-      components.push(...button(`metric_${metric.id}_detail`, "Source", "borderless", { event: { name: "show_evidence", context: { evidenceId: metric.evidenceId } } }));
+      components.push({ id: `metric_${metric.id}`, component: "Stat", label: { path: `/metrics/${metric.id}/label` }, value: { path: `/metrics/${metric.id}/value` }, tone: metric.tone === "danger" ? "alert" : "neutral" });
     }
   }
 
@@ -170,6 +182,18 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
     title: presentation.title,
     subtitle: presentation.subtitle,
     view,
+    synthesis: presentation.synthesis ? {
+      headline: presentation.synthesis.headline,
+      steps: Object.fromEntries(presentation.synthesis.steps.map((step, index) => [step.id, {
+        order: index + 1,
+        text: step.text,
+        kind: step.kind,
+        // Stated so the analyst's own reasoning never reads as an observed fact.
+        kindLabel: step.kind === "observed" ? "Observed" : "Inferred link, not confirmed",
+        evidenceIds: step.evidenceIds,
+      }])),
+      separate: Object.fromEntries(presentation.synthesis.separate.map((item) => [item.id, { text: item.text, evidenceIds: item.evidenceIds }])),
+    } : undefined,
     metrics: Object.fromEntries(presentation.metrics.map((metric) => [metric.id, metric])),
     findings: Object.fromEntries(presentation.findings.map((item) => [item.id, {
       ...item,

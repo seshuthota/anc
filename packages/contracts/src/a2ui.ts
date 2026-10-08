@@ -103,11 +103,27 @@ export const PresentationActionSchema = z.object({
   entities: z.array(z.object({ type: z.string(), id: z.string(), label: z.string().optional() })).default([])
 });
 
+const SynthesisPointSchema = z.object({
+  id: z.string().min(1),
+  text: z.string().min(1),
+  findingIds: z.array(z.string().min(1)),
+  evidenceIds: z.array(z.string().min(1))
+});
+
+/** The lead analyst's account connecting separate findings: a headline, the chain behind it, and unrelated issues. */
+export const PresentationSynthesisSchema = z.object({
+  headline: z.string().min(1),
+  /** In order of cause and effect. An inferred step is the analyst's link between findings, not something a tool observed. */
+  steps: z.array(SynthesisPointSchema.extend({ kind: z.enum(["observed", "inferred"]) })).min(1),
+  separate: z.array(SynthesisPointSchema).default([])
+});
+
 export const PresentationInputSchema = z.object({
   title: z.string().min(1),
   subtitle: z.string().min(1),
   /** Drives layout. Previously computed by the planner and then ignored by the composer. */
   view: z.enum(PRESENTATION_VIEWS).default("summary"),
+  synthesis: PresentationSynthesisSchema.optional(),
   metrics: z.array(PresentationMetricSchema).default([]),
   findings: z.array(PresentationFindingSchema).default([]),
   table: PresentationTableSchema.optional(),

@@ -5,8 +5,8 @@ import { authorizationUrl, createPkce, endpointsFromDiscovery, principalIdFromCl
 
 describe("sessions", () => {
   it("accepts a signed session and rejects tampering", () => {
-    const token = signSession({ principalId: "user-ops", subject: "ops-subject", organizationId: "org-democo" }, "secret");
-    expect(verifySession(token, "secret")?.principalId).toBe("user-ops");
+    const token = signSession({ principalId: "user-hub-hyd", subject: "hub-subject", organizationId: "org-democo" }, "secret");
+    expect(verifySession(token, "secret")?.principalId).toBe("user-hub-hyd");
     expect(verifySession(token, "other")).toBeNull();
     const [, body, signature] = token.split(".");
     const flipped = Buffer.from(body ?? "", "base64url");
@@ -15,10 +15,10 @@ describe("sessions", () => {
   });
 
   it("keeps the internal hop short-lived", () => {
-    const hop = signHop("user-finance", "secret", 1_000);
-    expect(verifyHop(hop, "secret", 1_000)).toBe("user-finance");
+    const hop = signHop("user-accounts", "secret", 1_000);
+    expect(verifyHop(hop, "secret", 1_000)).toBe("user-accounts");
     expect(verifyHop(hop, "secret", 70_000)).toBeNull();
-    expect(verifyHop("user-finance", "secret")).toBeNull();
+    expect(verifyHop("user-accounts", "secret")).toBeNull();
   });
 
   it("selects demo mode unless OpenID is requested", () => {
@@ -37,7 +37,7 @@ describe("sessions", () => {
       iss: "https://idp.example",
       aud: "democo",
       exp: Math.floor(Date.now() / 1000) + 600,
-      sub: "subject-ops",
+      sub: "subject-hub",
       email: "alex@democo.example",
     })).toString("base64url");
     const signature = sign("sha256", Buffer.from(`${header}.${payload}`), privateKey).toString("base64url");
@@ -46,7 +46,7 @@ describe("sessions", () => {
       audience: "democo",
       getKey: async (kid) => kid === "k1" ? jwk : undefined,
     });
-    expect(principalIdFromClaims(identity, JSON.stringify({ "subject-ops": "user-ops" }))).toBe("user-ops");
+    expect(principalIdFromClaims(identity, JSON.stringify({ "subject-hub": "user-hub-hyd" }))).toBe("user-hub-hyd");
     const noneHeader = Buffer.from(JSON.stringify({ alg: "none", kid: "k1" })).toString("base64url");
     await expect(verifyOidcIdToken(`${noneHeader}.${payload}.`, {
       issuer: "https://idp.example",

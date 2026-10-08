@@ -72,11 +72,14 @@ describe("UI Composer", () => {
     }
   });
 
-  it("rejects a tree that drops or redefines a provided block", async () => {
+  it("rejects a tree that drops a provided block and overrules one that redefines it", async () => {
     useComposerModel(async () => ({ components: good.map((component) => (component.id === "root" ? { ...component, children: ["head", "limits"] } : component)) }));
     expect((await composeSurface("s", presentation, { objective: "overdue invoices" })).source).toBe("template");
+    // Redefining a block does not replace it: the runtime's table is what is shown.
     useComposerModel(async () => ({ components: [...good, { id: "table_block", component: "Text", text: "no table today" }] }));
-    expect((await composeSurface("s", presentation, { objective: "overdue invoices" })).source).toBe("template");
+    const overruled = await composeSurface("s", presentation, { objective: "overdue invoices" });
+    expect(overruled.source).toBe("model");
+    expect(componentsOf(overruled).find((component) => component.id === "table_block")?.component).toBe("Table");
   });
 
   it("repairs once using the rejection as feedback", async () => {

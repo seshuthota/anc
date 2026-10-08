@@ -1,9 +1,13 @@
-export const DEMO_CLOCK = process.env.DEMO_CLOCK ?? "2026-09-20T08:00:00.000Z";
+import { DEMO_CLOCK as SIMULATION_CLOCK, TIMEZONE, toLocalIso } from "@anc/logistics-db";
 
-export const CURRENT = { from: "2026-09-19T09:00:00.000Z", to: DEMO_CLOCK };
-export const BASELINE = { from: "2026-09-18T09:00:00.000Z", to: "2026-09-19T09:00:00.000Z" };
-export const RELEASE_WINDOW = { from: "2026-09-19T00:00:00.000Z", to: DEMO_CLOCK };
-/** Multi-day window used for trend and timeline requests. */
-export const TREND_WINDOW = { from: "2026-09-14T00:00:00.000Z", to: DEMO_CLOCK };
+/** The network's fixed "now". Every question is answered as of this instant. */
+export const DEMO_CLOCK = SIMULATION_CLOCK;
+export { TIMEZONE };
+
+const HOUR = 3_600_000;
+const now = Date.parse(DEMO_CLOCK);
+
+/** The default period a specialist looks at: the 24 hours up to now. */
+export const CURRENT = { from: toLocalIso(now - 24 * HOUR), to: DEMO_CLOCK };
 
 export const DEFAULT_THREAD_ID = "local-demo";

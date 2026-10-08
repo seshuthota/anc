@@ -21,6 +21,26 @@ const RUN_START = "Looking into your question";
 const BRIEFING = "Brief me: what needs my attention this morning?";
 const briefedKey = (id: string) => `democo-briefed:${id}`;
 
+/** Who did a step, read from how the runtime words its activity. Each has its own colour in the rail. */
+const ACTORS: Array<[pattern: RegExp, key: string, name: string]> = [
+  [/^Network Agent\s+/, "network", "Network"],
+  [/^Shipments Agent\s+/, "shipments", "Shipments"],
+  [/^Last-Mile Agent\s+/, "lastmile", "Last mile"],
+  [/^Customers Agent\s+/, "customers", "Customers"],
+  [/^Lead Analyst\s+/, "analyst", "Lead analyst"],
+  [/^UI Composer\s+/, "composer", "UI composer"],
+];
+
+function describeStep(message: string): { actor: string; name: string; text: string } {
+  for (const [pattern, actor, name] of ACTORS) {
+    if (pattern.test(message)) {
+      const rest = message.replace(pattern, "").replace(/^finding:\s*/, "").replace(/^connected the findings:\s*/, "");
+      return { actor, name, text: rest.charAt(0).toUpperCase() + rest.slice(1) };
+    }
+  }
+  return { actor: "system", name: "", text: message };
+}
+
 export default function HomePage() {
   const [state, setState] = useState<PublicState>(emptyState);
   const [question, setQuestion] = useState("");
@@ -233,7 +253,7 @@ export default function HomePage() {
         investigationId: state.investigationId,
         surfaceId: state.surface?.surfaceId,
         surfaceRevision: state.surface?.revision,
-        entities: Array.isArray(context.entities) ? context.entities : context.entityId ? [{ type: context.entityType ?? "customer", id: context.entityId }] : [],
+        entities: Array.isArray(context.entities) ? context.entities : context.entityId && context.entityType ? [{ type: context.entityType, id: context.entityId }] : [],
         parameters: context,
         principalId,
       }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : principalId, sessionAuth.current ? { base: runtimeBase.current, credentials: "include" } : undefined);
@@ -316,7 +336,7 @@ export default function HomePage() {
       : <form method="post" action="/api/auth/logout"><button className="ghost" type="submit">Sign out</button></form>
   ) : (
     <select className="persona-select" aria-label="Demo identity (not real sign-in)" value={principalId} onChange={(event) => void switchPrincipal(event.target.value)}>
-      {(personas.length ? personas : [{ id: "user-coo", displayName: "Casey Nguyen", title: "Chief Operating Officer" }]).map((item) => (
+      {(personas.length ? personas : [{ id: "user-coo", displayName: "Ananya Reddy", title: "Chief Operating Officer" }]).map((item) => (
         <option key={item.id} value={item.id}>{item.displayName} · {item.title}</option>
       ))}
     </select>
@@ -326,12 +346,12 @@ export default function HomePage() {
     <main className={home ? "app-shell home" : "app-shell"}>
       <header className="masthead">
         {home
-          ? <h1 className="wordmark">DemoCo</h1>
-          : <button className="wordmark" type="button" onClick={() => void ask(BRIEFING)} aria-label="DemoCo: refresh briefing" title="Refresh briefing">DemoCo</button>}
+          ? <h1 className="wordmark"><span className="wordmark-mark" aria-hidden="true" />DemoCo <span className="wordmark-sub">Parcel Network</span></h1>
+          : <button className="wordmark" type="button" onClick={() => void ask(BRIEFING)} aria-label="DemoCo: refresh briefing" title="Refresh the morning briefing"><span className="wordmark-mark" aria-hidden="true" />DemoCo</button>}
         {signedOut ? <p className="muted">Sign in to use the workspace.</p> : (
           <form className="question-form" onSubmit={submit} id="question">
-            <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask anything about the company" aria-label="Workspace question" autoFocus />
-            <button type="submit" disabled={busy || !question.trim()} aria-label="Ask">→</button>
+            <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about hubs, parcels, lockers, shippers or complaints" aria-label="Workspace question" autoFocus />
+            <button type="submit" disabled={busy || !question.trim()}>Ask</button>
           </form>
         )}
         <div className="connection">
@@ -339,6 +359,7 @@ export default function HomePage() {
             <>
               <span className={`status-dot ${working ? "running" : state.status === "failed" ? "failed" : ""}`} aria-hidden="true" />
               <span aria-live="polite">{statusLabel}</span>
+              <span className="clock">Mon 21 Sep, 07:00 IST</span>
               {busy ? <button className="ghost" type="button" onClick={() => void cancel()}>Cancel</button> : null}
             </>
           )}
@@ -350,8 +371,7 @@ export default function HomePage() {
           <section className={working && surface ? "workspace updating" : "workspace"} aria-live="polite" aria-busy={busy}>
             {pending ? (
               <div className="pending" role="status">
-                <span className="eyebrow">{asked === BRIEFING ? "GOOD MORNING" : "WORKING ON"}</span>
-                <h2>{asked === BRIEFING ? "Preparing your briefing" : asked || "Your question"}</h2>
+                <h2>{asked === BRIEFING ? "Preparing your morning briefing" : asked || "Working on it"}</h2>
                 <p className="muted">{steps[steps.length - 1]?.message ?? "Starting…"}</p>
                 <div className="skeleton" aria-hidden="true"><span /><span /><span /></div>
               </div>
@@ -369,21 +389,24 @@ export default function HomePage() {
           </section>
           <aside className="steps-panel" aria-label="Progress">
             <div className="steps-heading">
-              <span className="eyebrow">STEPS</span>
-              <span className="muted">{statusLabel}</span>
+              <h2>How this was worked out</h2>
             </div>
             <ol className="steps">
               {steps.map((item, index) => {
                 const current = working && index === steps.length - 1;
-                const failed = /failed|could not|unavailable/i.test(item.message);
+                const failed = /failed|could not|unavailable|rejected/i.test(item.message);
+                const step = describeStep(item.message);
                 return (
-                  <li key={item.id} className={current ? "step current" : failed ? "step failed" : "step"}>
-                    <span className="step-mark" aria-hidden="true">{current ? "" : failed ? "!" : "✓"}</span>
-                    <div><p>{item.message}</p><small>{activityKindLabel(item.kind)}</small></div>
+                  <li key={item.id} className={`step actor-${step.actor}${current ? " current" : ""}${failed ? " failed" : ""}`}>
+                    <span className="step-mark" aria-hidden="true" />
+                    <div>
+                      {step.name ? <span className="step-actor">{step.name}</span> : null}
+                      <p>{step.text}</p>
+                    </div>
                   </li>
                 );
               })}
-              {!steps.length ? <li className="step"><span className="step-mark" aria-hidden="true" /><div><p className="muted">No steps yet.</p></div></li> : null}
+              {!steps.length ? <li className="step actor-system"><span className="step-mark" aria-hidden="true" /><div><p>Nothing has been asked yet.</p></div></li> : null}
             </ol>
             {working ? null : (
               <details className="dev-details" open={developerOpen} onToggle={(event) => setDeveloperOpen(event.currentTarget.open)}>
@@ -410,7 +433,7 @@ export default function HomePage() {
         <div className="drawer" role="dialog" aria-modal="true" aria-label="Supporting evidence">
           <div className="drawer-card">
             <div className="workspace-heading">
-              <div><span className="eyebrow">SUPPORTING SOURCE</span><h2>{String(evidence.tool ?? "Saved evidence")}</h2></div>
+              <div><h2>Where this came from</h2><p className="muted">Company tool: {String(evidence.tool ?? "saved record").replaceAll("_", " ")}</p></div>
               <button className="ghost" type="button" autoFocus onClick={() => setEvidence(null)}>Close</button>
             </div>
             <p className="muted">{String(evidence.evidenceId ?? "")}</p>

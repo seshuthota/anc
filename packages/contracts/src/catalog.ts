@@ -5,8 +5,8 @@
  * (`@copilotkit/a2ui-renderer`). `BASIC_CATALOG_COMPONENTS` are the standard
  * basic-catalog components the workspace uses. `WORKSPACE_EXTENSION_COMPONENTS`
  * are registered on top of the basic catalog in `apps/web/lib/catalog.tsx`,
- * because the basic catalog has no data table, chart, or selection that reports
- * back to the agent.
+ * because the basic catalog has no data table, chart, key-figure tile, ordered
+ * chain, or selection that reports back to the agent.
  *
  * The server validator and the UI Composer both read this list, so neither can
  * accept or author a component the browser cannot draw.
@@ -27,8 +27,13 @@ export const WORKSPACE_EXTENSION_COMPONENTS = [
   "Chart",
   "EditField",
   "SelectOption",
+  "Sequence",
+  "Stat",
   "Table",
 ] as const;
+
+/** Extensions a UI Composer may author itself. The rest are built by the runtime from tool output and only placed. */
+export const AUTHORABLE_EXTENSION_COMPONENTS = ["Sequence", "Stat"] as const;
 
 export const A2UI_COMPONENT_TYPES = [
   ...BASIC_CATALOG_COMPONENTS,

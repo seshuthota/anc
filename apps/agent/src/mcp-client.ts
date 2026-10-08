@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { DEFAULT_COMPANY_DB_PATH } from "@anc/database";
+import { DEFAULT_LOGISTICS_DB_PATH } from "@anc/logistics-db";
+import { TOOL_DOMAINS } from "@anc/logistics-mcp/tools";
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,18 +11,17 @@ import { DEMO_OWNER_ID } from "@anc/policy";
 
 type McpResult = { structuredContent?: unknown; isError?: boolean; content?: unknown };
 
-export const TOOL_ALLOWLISTS: Record<Domain, readonly string[]> = {
-  reliability: ["get_service_health", "get_service_health_series", "get_error_metrics", "get_recent_releases", "get_release_details", "list_impacted_customers", "list_open_incidents", "list_maintenance_windows"],
-  product: ["get_feature_usage", "compare_usage_periods", "get_customer_feature_usage"],
-  customer: ["search_customers", "get_customer", "search_support_tickets", "get_customer_support_history", "list_unassigned_escalations", "list_eligible_assignees"],
-  finance: ["calculate_account_exposure", "get_subscription", "list_invoice_aging"],
-};
+/** The tools each specialist may call, taken from the company server's own grouping. */
+export const TOOL_ALLOWLISTS = Object.entries(TOOL_DOMAINS).reduce<Record<Domain, string[]>>((lists, [tool, domain]) => {
+  lists[domain as Domain].push(tool);
+  return lists;
+}, { network: [], shipments: [], last_mile: [], customers: [] });
 
 const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
-const companyMcpRoot = fileURLToPath(new URL("../../company-mcp", import.meta.url));
+const companyMcpRoot = fileURLToPath(new URL("../../logistics-mcp", import.meta.url));
 
 function companyDbPath(): string {
-  const raw = process.env.COMPANY_DB_PATH ?? DEFAULT_COMPANY_DB_PATH;
+  const raw = process.env.LOGISTICS_DB_PATH ?? DEFAULT_LOGISTICS_DB_PATH;
   return isAbsolute(raw) ? raw : resolve(workspaceRoot, raw);
 }
 
@@ -35,7 +35,7 @@ export class CompanyMcpClient {
     if (this.client) return;
     const dbPath = companyDbPath();
     if (!existsSync(dbPath)) {
-      throw new Error(`Company database not found at ${dbPath}. Run pnpm db:seed.`);
+      throw new Error(`Company database not found at ${dbPath}. Run pnpm logistics:seed.`);
     }
     const transport = new StdioClientTransport({
       command: "pnpm",
@@ -44,9 +44,9 @@ export class CompanyMcpClient {
       env: {
         ...process.env,
         PATH: process.env.PATH ?? "/usr/bin",
-        COMPANY_DB_PATH: dbPath,
+        LOGISTICS_DB_PATH: dbPath,
         ANC_PRINCIPAL_ID: this.ctx?.principalId ?? process.env.ANC_PRINCIPAL_ID ?? DEMO_OWNER_ID,
-        COMPANY_DB_WRITABLE: process.env.COMPANY_DB_WRITABLE ?? "true",
+        LOGISTICS_DB_WRITABLE: process.env.LOGISTICS_DB_WRITABLE ?? "true",
       },
       stderr: "pipe",
     });
@@ -96,11 +96,11 @@ export class CompanyMcpClient {
     return evidence;
   }
 
-  /** The company server's own tool descriptions, keyed by tool name. */
-  async describeTools(): Promise<Record<string, string>> {
+  /** The company server's own description and argument schema for each tool. */
+  async describeTools(): Promise<Record<string, { description: string; inputSchema: Record<string, unknown> }>> {
     if (!this.client) throw new Error("MCP client is not connected");
     const listed = await this.client.listTools();
-    return Object.fromEntries(listed.tools.map((tool) => [tool.name, tool.description ?? ""]));
+    return Object.fromEntries(listed.tools.map((tool) => [tool.name, { description: tool.description ?? "", inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<string, unknown> }]));
   }
 
   async close(): Promise<void> {

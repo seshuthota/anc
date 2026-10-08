@@ -68,7 +68,7 @@ describe("action contract", () => {
     const action = {
       actionId: "act-1",
       name: "show_evidence",
-      threadId: "session:user-ops",
+      threadId: "session:user-hub-hyd",
       investigationId: "run-1",
       surfaceId: "surface-1",
       surfaceRevision: 0,
@@ -80,7 +80,7 @@ describe("action contract", () => {
     const parsed = SemanticActionSchema.parse({
       actionId: "act-1",
       name: "show_evidence",
-      threadId: "session:user-ops",
+      threadId: "session:user-hub-hyd",
       investigationId: "run-1",
       surfaceId: "surface-1",
       surfaceRevision: 1,

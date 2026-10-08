@@ -1,24 +1,70 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
-import { createCatalog, type CatalogDefinitions } from "@copilotkit/a2ui-renderer";
+import React, { createContext, useContext, useState } from "react";
+import { basicCatalog, createCatalog, type CatalogDefinitions } from "@copilotkit/a2ui-renderer";
 import { WORKSPACE_CATALOG_ID } from "@anc/contracts/catalog";
 import { z } from "zod";
 
 /**
- * Workspace extensions to the standard A2UI basic catalog.
+ * The workspace catalog: the standard A2UI basic catalog, drawn in this
+ * product's own style, plus a few components the basic catalog lacks.
  *
- * The basic catalog (Text, Row, Column, Card, List, Divider, Button, …) is
- * rendered by `@copilotkit/a2ui-renderer` unchanged. It has no data table,
- * chart, or selection that reports back to the agent, so those four are
- * registered here. `@anc/contracts/catalog` lists the same names for the
- * server validator and the UI Composer.
+ * Agents still author plain basic-catalog components (Text, Row, Column, Card,
+ * List, Divider, Button). Their props are the standard ones; only how they are
+ * drawn is ours, so the page looks like one product rather than a default
+ * renderer. Table, Chart, Stat, Sequence, SelectOption and EditField are
+ * extensions. `@anc/contracts/catalog` lists the same names for the server
+ * validator and the UI Composer.
  */
 
 /** A prop that is either a literal or a `{ path }` binding into the surface data model. */
 const bound = <T extends z.ZodTypeAny>(literal: T) => z.union([literal, z.object({ path: z.string() })]);
 
+/** The standard component's own props schema, so a themed renderer accepts exactly what the standard one does. */
+const standard = (name: string) => (basicCatalog.components.get(name) as unknown as { schema: z.ZodObject<z.ZodRawShape> }).schema;
+
+type ChildRef = string | { id: string; basePath?: string };
+type Build = (id: string, basePath?: string) => React.ReactNode;
+
+/** Draws a resolved child list, whether it was written out or generated from a data list. */
+function Children({ list, build }: { list: unknown; build: Build }) {
+  if (!Array.isArray(list)) return null;
+  return <>{(list as ChildRef[]).map((item, index) => (typeof item === "string"
+    ? <React.Fragment key={`${item}-${index}`}>{build(item)}</React.Fragment>
+    : <React.Fragment key={`${item.id}-${index}`}>{build(item.id, item.basePath)}</React.Fragment>))}</>;
+}
+
+/** Captions that state how far a claim can be trusted are drawn as tags, so the distinction is visible at a glance. */
+const TRUST_TAGS: Record<string, string> = {
+  "Observed": "observed",
+  "Inferred link, not confirmed": "inferred",
+  "Hypothesis, not confirmed": "inferred",
+  "Open question": "open",
+};
+
+const FLEX: Record<string, string> = { start: "flex-start", center: "center", end: "flex-end", stretch: "stretch", spaceBetween: "space-between", spaceAround: "space-around", spaceEvenly: "space-evenly" };
+
 export const workspaceDefinitions = {
+  Text: { props: standard("Text") },
+  Column: { props: standard("Column") },
+  Row: { props: standard("Row") },
+  List: { props: standard("List") },
+  Card: { props: standard("Card") },
+  Divider: { props: standard("Divider") },
+  Button: { props: standard("Button") },
+  Stat: {
+    description: "One key figure as a tile: a short label, the value, and an optional note.",
+    props: z.object({
+      label: bound(z.string()),
+      value: bound(z.string()),
+      tone: z.enum(["neutral", "alert", "good"]).optional(),
+      note: bound(z.string()).optional(),
+    }),
+  },
+  Sequence: {
+    description: "Draws its children as numbered stops on one connected line. For things that are genuinely in order.",
+    props: z.object({ children: z.array(z.string()) }),
+  },
   Table: {
     description: "A sortable data table. Bind columns to a string array and rows to an array of {id, cells[]} records.",
     props: z.object({
@@ -82,6 +128,56 @@ function sortRows(rows: Row[], column: number, direction: 1 | -1): Row[] {
 }
 
 export const workspaceCatalog = createCatalog(workspaceDefinitions, {
+  Text: ({ props }) => {
+    const text = String((props as { text?: unknown }).text ?? "");
+    const variant = String((props as { variant?: unknown }).variant ?? "body");
+    if (variant === "caption") {
+      const tag = TRUST_TAGS[text];
+      return tag ? <span className={`ws-tag ws-tag-${tag}`}>{text}</span> : <small className="ws-caption">{text}</small>;
+    }
+    if (/^h[1-5]$/.test(variant)) {
+      const Heading = variant as "h1" | "h2" | "h3" | "h4" | "h5";
+      return <Heading className={`ws-${variant}`}>{text}</Heading>;
+    }
+    return <p className="ws-body">{text}</p>;
+  },
+  Column: ({ props, children }) => {
+    const view = props as { children?: unknown; align?: string; justify?: string };
+    return <div className="ws-column" style={{ alignItems: FLEX[view.align ?? "stretch"], justifyContent: FLEX[view.justify ?? "start"] }}><Children list={view.children} build={children as Build} /></div>;
+  },
+  Row: ({ props, children }) => {
+    const view = props as { children?: unknown; align?: string; justify?: string };
+    return <div className="ws-row" style={{ alignItems: FLEX[view.align ?? "stretch"], justifyContent: FLEX[view.justify ?? "start"] }}><Children list={view.children} build={children as Build} /></div>;
+  },
+  List: ({ props, children }) => {
+    const view = props as { children?: unknown; direction?: string };
+    return <div className={view.direction === "horizontal" ? "ws-row" : "ws-column"}><Children list={view.children} build={children as Build} /></div>;
+  },
+  Card: ({ props, children }) => {
+    const child = (props as { child?: string }).child;
+    return <article className="ws-card">{child ? children(child) : null}</article>;
+  },
+  Divider: ({ props }) => <hr className={(props as { axis?: string }).axis === "vertical" ? "ws-divider ws-divider-vertical" : "ws-divider"} />,
+  Button: ({ props, children }) => {
+    const view = props as { child?: string; variant?: string; action?: () => void; isValid?: boolean };
+    return (
+      <button type="button" className={`ws-button ws-button-${view.variant ?? "default"}`} onClick={view.action} disabled={view.isValid === false}>
+        {view.child ? children(view.child) : null}
+      </button>
+    );
+  },
+  Stat: ({ props }) => (
+    <div className={`ws-stat ws-stat-${props.tone ?? "neutral"}`}>
+      <span className="ws-stat-label">{typeof props.label === "string" ? props.label : ""}</span>
+      <strong className="ws-stat-value">{typeof props.value === "string" ? props.value : String(props.value ?? "")}</strong>
+      {typeof props.note === "string" && props.note ? <span className="ws-stat-note">{props.note}</span> : null}
+    </div>
+  ),
+  Sequence: ({ props, children }) => (
+    <ol className="ws-sequence">
+      {props.children.map((id, index) => <li className="ws-stop" key={`${id}-${index}`}>{children(id)}</li>)}
+    </ol>
+  ),
   Table: ({ props, dispatch }) => {
     const headers = Array.isArray(props.columns) ? props.columns.map(String) : [];
     const rows = (Array.isArray(props.rows) ? props.rows : []) as Row[];

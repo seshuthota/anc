@@ -147,7 +147,7 @@ export function createAgentServer() {
         integrations: ["MCP stdio", "SQLite", "LangGraph", "A2UI v0.9", "AG-UI"],
         cost: { status: configuredUsdPerMillion() === null ? "unknown" : "known", usdPerMillion: configuredUsdPerMillion() },
         budgets: {
-          maxModelTokens: Number(process.env.MAX_MODEL_TOKENS ?? 24000),
+          maxModelTokens: Number(process.env.MAX_MODEL_TOKENS ?? 150000),
           maxRuntimeMs: Number(process.env.MAX_RUNTIME_MS ?? 120000),
           usdBudget: process.env.MODEL_USD_BUDGET ? Number(process.env.MODEL_USD_BUDGET) : null,
         },

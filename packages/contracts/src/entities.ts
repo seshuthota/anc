@@ -31,7 +31,7 @@ export const TimeWindowSchema = z.object({
 }).refine((value) => value.start < value.end, { message: "start must precede end" });
 
 export const EntityRefSchema = z.object({
-  type: z.enum(["customer", "subscription", "release", "incident", "ticket", "feature", "service"]),
+  type: z.enum(["hub", "district", "route_run", "shipment", "shipper", "locker", "complaint", "equipment"]),
   id: EntityId,
   label: z.string().optional()
 });

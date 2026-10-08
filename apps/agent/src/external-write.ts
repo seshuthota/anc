@@ -12,7 +12,7 @@ export async function executeExternalWrite(input: {
 }): Promise<{ status: string; operationId: string; receipt: string | null }> {
   const env = input.env ?? process.env;
   if (env.EXTERNAL_WRITE_ENABLED !== "true") {
-    throw new Error("External writes are disabled. Ticket assignment remains the only enabled company write.");
+    throw new Error("External writes are disabled. Complaint assignment remains the only enabled company write.");
   }
   const url = env.EXTERNAL_WRITE_URL;
   if (!url) throw new Error("No external write system is configured");

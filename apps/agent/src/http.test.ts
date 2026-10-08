@@ -1,17 +1,8 @@
-import { mkdtempSync } from "node:fs";
 import { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { DEFAULT_COMPANY_DB_PATH, seedScenario } from "@anc/database";
+import { prepareTestEnvironment } from "./test-env.js";
 
-const dir = mkdtempSync(join(tmpdir(), "anc-http-"));
-process.env.RUNTIME_DB_PATH = join(dir, "runtime.sqlite");
-process.env.COMPANY_DB_PATH = DEFAULT_COMPANY_DB_PATH;
-process.env.MODEL_PROVIDER = "fixture";
-process.env.MODEL_EXECUTION_MODE = "fixture";
-process.env.VITEST = "true";
-seedScenario(process.env.COMPANY_DB_PATH, "sync-regression");
+prepareTestEnvironment("anc-http-");
 
 const { createAgentServer } = await import("./server.js");
 const { store } = await import("./runtime.js");
@@ -51,7 +42,7 @@ describe("agent HTTP", () => {
     expect(response.ok).toBe(true);
     const state = await response.json() as { status: string; surface?: { title: string }; execution?: { executionMode: string } };
     expect(["completed", "partial"]).toContain(state.status);
-    expect(state.surface?.title).toMatch(/Morning overview|Incomplete answer|Unassigned|Results/);
+    expect(state.surface?.title).toMatch(/This morning|Nothing needs your attention|Incomplete answer|Results/);
     expect(state.execution?.executionMode).toBe("fixture");
   }, 60_000);
 

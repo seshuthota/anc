@@ -31,7 +31,7 @@ export default defineConfig({
         MODEL_EXECUTION_MODE: "fixture",
         INVESTIGATION_STEP_DELAY_MS: "1200",
         RUNTIME_DB_PATH: join(tmpdir(), `anc-e2e-runtime-${Date.now()}.sqlite`),
-        COMPANY_DB_PATH: resolve(root, "data/company.sqlite"),
+        LOGISTICS_DB_PATH: resolve(root, "data/logistics.sqlite"),
       },
     },
     {

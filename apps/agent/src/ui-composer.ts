@@ -1,5 +1,5 @@
 import { A2UI_CATALOG_ID, ActionNameSchema, type A2UIMessage, type PresentationInput } from "@anc/contracts";
-import { BASIC_CATALOG_COMPONENTS } from "@anc/contracts/catalog";
+import { AUTHORABLE_EXTENSION_COMPONENTS, BASIC_CATALOG_COMPONENTS } from "@anc/contracts/catalog";
 import OpenAI from "openai";
 import { validateA2UI } from "./a2ui-validate.js";
 import { composeA2UI } from "./composer.js";
@@ -61,17 +61,20 @@ const CATALOG = `Components (A2UI v0.9, flat list; every component has a unique 
 - List: {"children": [ids], "direction"?: "vertical"|"horizontal"}
 - Divider: {}
 - Button: {"child": id of a Text component, "variant"?: "primary"|"borderless"|"default", "action": {"event": {"name": string, "context"?: object}}}
+- Stat: {"label": string | {"path"}, "value": {"path"}, "tone"?: "neutral"|"alert"|"good", "note"?: string | {"path"}} — one key figure as a tile. Use "alert" for a figure that is a problem. Put several in a Row.
+- Sequence: {"children": [ids]} — draws its children as numbered stops on one connected line. Use it only for things that really are in order, such as the synthesis steps from cause to effect.
 A {"path"} value is a JSON Pointer into the data model, for example {"path": "/findings/<id>/title"}.`;
 
-const SYSTEM = `You are DemoCo's UI Composer. You design the interface for the user's current objective as an A2UI v0.9 component tree.
+const SYSTEM = `You are the UI Composer for an Indian parcel carrier's operations workspace. You design the interface for the person's current objective as an A2UI v0.9 component tree.
 
 Rules:
 - Present only what is in the supplied data. Every number, name, date and finding must be shown through a {"path"} binding. Literal text is for short labels and section headings only, and must not contain figures.
-- Design for this objective, not a fixed page. Lead with what matters most, group related findings, put key metrics side by side in a Row of Cards, and give lower-priority material less space. Prefer structure over long prose.
+- Design for this objective, not a fixed page. Lead with what matters most, group related findings, put key metrics side by side as Stat tiles in a Row, and give lower-priority material less space. Prefer structure over long prose.
 - Show a finding's kindLabel next to it so an unconfirmed hypothesis never reads as fact.
 - Offer drill-downs as Buttons. Use only the listed actions, by name. For evidence use the action "show_evidence" with context {"evidenceIds": [...]} or {"evidenceId": "..."} using ids from the data.
 - Brevity is the point of this product. Never fill the page with prose: a person should grasp it in seconds and know what to do next.
-- In "briefing" mode, show at most five items, the ones that matter most to this audience, most serious first. Each item is one Card: its headline (the finding title), one key figure if a metric supports it, its kindLabel, and exactly one Button with action "investigate" whose question asks about that specific item. Do not show finding bodies, the subtitle, or anything the audience cannot act on. Merge findings that describe the same problem into one item. Leave out low-value and housekeeping findings entirely.
+- When the data has a "synthesis", it is the lead analyst's connected account and it is the centrepiece. Show its steps in their order inside one Sequence (cause first, consequences after), each stop holding the step's text and its kindLabel so an inferred link never reads as fact. Do not repeat a finding as its own card when a step already covers it. Show each "separate" issue apart from the sequence, so it is clearly not part of it.
+- In "briefing" mode, show at most five items, the ones that matter most to this audience, most serious first. Each item is one Card: its headline (a synthesis step's text, or a finding title), one key figure if a metric supports it, its kindLabel, and exactly one Button with action "investigate" whose question asks about that specific item. Do not show finding bodies, the subtitle, or anything the audience cannot act on. Merge findings that describe the same problem into one item. Leave out low-value and housekeeping findings entirely.
 - In "detail" mode, answer the one question asked: lead with the figures, show at most six findings, and show a finding's body only where the headline is not enough.
 - To let the person go deeper into a topic, use a Button with action "investigate" and context {"question": "<a short follow-up question in plain words>"}.
 - Place every listed block by adding its id to a "children" array exactly once. Do not define components with those ids.
@@ -127,7 +130,7 @@ function paths(value: unknown, found: string[] = []): string[] {
  */
 function review(components: Component[], template: Component[], blockIds: string[], data: Record<string, unknown>, request: ComposerModelRequest): string[] {
   const errors: string[] = [];
-  const allowedTypes = new Set<string>(BASIC_CATALOG_COMPONENTS);
+  const allowedTypes = new Set<string>([...BASIC_CATALOG_COMPONENTS, ...AUTHORABLE_EXTENSION_COMPONENTS]);
   const haystack = `${JSON.stringify(data)} ${request.objective}`;
   const offered = new Map(request.actions.map((action) => [action.name, action]));
   const evidence = new Set(request.evidenceIds);
@@ -138,17 +141,20 @@ function review(components: Component[], template: Component[], blockIds: string
   for (const component of components) {
     const id = String(component.id ?? "");
     const type = String(component.component ?? "");
-    if (protectedIds.has(id)) errors.push(`"${id}" is a provided block; place it, do not define it`);
     if (!allowedTypes.has(type)) errors.push(`component type ${type} is not available to you`);
     for (const path of paths(component)) {
       if (!path.startsWith("/") || readPointer(data, path) === undefined) errors.push(`path ${path} does not exist in the data`);
     }
-    if (type === "Text" && typeof component.text === "string") {
-      for (const figure of component.text.match(/\d[\d,.]*\d|\d/g) ?? []) {
-        if (!haystack.includes(figure)) errors.push(`literal text "${component.text.slice(0, 60)}" contains a figure that is not in the data; bind it with a path`);
+    // Any literal the person will read is held to the same rule, whichever component carries it.
+    for (const field of type === "Text" ? ["text"] : type === "Stat" ? ["label", "value", "note"] : []) {
+      const literal = component[field];
+      if (typeof literal !== "string") continue;
+      for (const figure of literal.match(/\d[\d,.]*\d|\d/g) ?? []) {
+        if (!haystack.includes(figure)) errors.push(`literal ${field} "${literal.slice(0, 60)}" in ${id} contains a figure that is not in the data; bind it with a path`);
       }
-      if (component.text.length > 120) errors.push(`literal text in ${id} is too long; bind prose with a path`);
+      if (literal.length > 120) errors.push(`literal ${field} in ${id} is too long; bind prose with a path`);
     }
+    if (type === "Stat" && typeof component.value === "string") errors.push(`Stat ${id} must take its value from the data with a path`);
     if (type === "Button") {
       const event = (component.action as { event?: { name?: unknown; context?: Record<string, unknown> } } | undefined)?.event;
       const name = String(event?.name ?? "");
@@ -171,6 +177,12 @@ function review(components: Component[], template: Component[], blockIds: string
   const reachable = new Set<string>();
   collect("root", merged, reachable);
   for (const id of blockIds) if (!reachable.has(id)) errors.push(`block ${id} must be placed in the tree`);
+  const shown = paths(components.filter((component) => reachable.has(String(component.id))));
+  const synthesis = data.synthesis as { steps?: Record<string, unknown> } | undefined;
+  for (const stepId of Object.keys(synthesis?.steps ?? {})) {
+    if (!shown.includes(`/synthesis/steps/${stepId}/text`)) errors.push(`synthesis step ${stepId} must be shown, bound to /synthesis/steps/${stepId}/text`);
+    if (!shown.includes(`/synthesis/steps/${stepId}/kindLabel`)) errors.push(`synthesis step ${stepId} must show its kindLabel`);
+  }
   if (!paths(components.filter((component) => reachable.has(String(component.id)))).length && !blockIds.length) {
     errors.push("the surface shows none of the supplied data");
   }
@@ -178,7 +190,7 @@ function review(components: Component[], template: Component[], blockIds: string
   if (request.mode === "briefing") {
     const drills = components.filter((component) => reachable.has(String(component.id)) && (component.action as { event?: { name?: string } } | undefined)?.event?.name === "investigate");
     if (!drills.length) errors.push('a briefing needs an "investigate" Button on each item so the person can go deeper');
-    if (components.filter((component) => reachable.has(String(component.id)) && component.component === "Card").length > 5) errors.push("a briefing shows at most five items");
+    if (components.filter((component) => reachable.has(String(component.id)) && component.component === "Card").length > 9) errors.push("a briefing is too long; merge or drop items");
   }
   return [...new Set(errors)];
 }
@@ -225,7 +237,7 @@ export async function composeSurface(surfaceId: string, presentation: Presentati
     objective: options.objective,
     view: presentation.view,
     catalog: CATALOG,
-    data: outline({ title: data.title, subtitle: data.subtitle, metrics: data.metrics, findings: data.findings }),
+    data: outline({ title: data.title, subtitle: data.subtitle, synthesis: data.synthesis, metrics: data.metrics, findings: data.findings }),
     blocks: blockIds.map((id) => ({ id, what: BLOCKS[id]! })),
     actions: briefing ? [] : presentation.actions.filter((action) => ActionNameSchema.safeParse(action.name).success).map((action) => ({ name: action.name, label: action.label })),
     evidenceIds: [...new Set([...presentation.metrics.map((metric) => metric.evidenceId), ...presentation.findings.flatMap((finding) => finding.evidenceIds)])],
@@ -236,10 +248,13 @@ export async function composeSurface(surfaceId: string, presentation: Presentati
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const reply = await askModel(request, options.runId, feedback) as { components?: unknown };
-      const authored = (Array.isArray(reply.components) ? reply.components : []).filter((item): item is Component => Boolean(item) && typeof item === "object");
-      const errors = review(authored, templateComponents, blockIds, data, request);
       const protectedIds = new Set<string>();
       for (const id of blockIds) collect(id, templateById, protectedIds);
+      // A model that redefines a provided block is simply overruled: the runtime's version is the one that is shown.
+      const authored = (Array.isArray(reply.components) ? reply.components : [])
+        .filter((item): item is Component => Boolean(item) && typeof item === "object")
+        .filter((component) => !protectedIds.has(String(component.id)));
+      const errors = review(authored, templateComponents, blockIds, data, request);
       // Follow-up actions carry the entities the runtime chose, whatever context the model wrote.
       const offered = new Map(presentation.actions.map((action) => [action.name, action]));
       const components = [

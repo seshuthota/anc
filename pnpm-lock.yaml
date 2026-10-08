@@ -23,9 +23,12 @@ importers:
       '@anc/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@anc/database':
+      '@anc/logistics-db':
         specifier: workspace:*
-        version: link:../../packages/database
+        version: link:../../packages/logistics-db
+      '@anc/logistics-mcp':
+        specifier: workspace:*
+        version: link:../logistics-mcp
       '@anc/policy':
         specifier: workspace:*
         version: link:../../packages/policy
@@ -61,11 +64,11 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.4)
 
-  apps/company-mcp:
+  apps/logistics-mcp:
     dependencies:
-      '@anc/database':
+      '@anc/logistics-db':
         specifier: workspace:*
-        version: link:../../packages/database
+        version: link:../../packages/logistics-db
       '@anc/policy':
         specifier: workspace:*
         version: link:../../packages/policy
@@ -170,7 +173,7 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.4)
 
-  packages/database:
+  packages/logistics-db:
     dependencies:
       better-sqlite3:
         specifier: ^12.4.1

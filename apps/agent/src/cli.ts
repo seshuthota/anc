@@ -5,7 +5,7 @@ const [command, ...rest] = process.argv.slice(2);
 
 async function main() {
   if (command === "investigate") {
-    const question = rest.filter((item) => item !== "--").join(" ").trim() || "What should I care about this morning?";
+    const question = rest.filter((item) => item !== "--").join(" ").trim() || "Brief me: what needs my attention this morning?";
     const state = await runInvestigation({ question, threadId: DEFAULT_THREAD_ID });
     console.log(JSON.stringify({ status: state.status, investigationId: state.investigationId, runId: state.runId, surface: state.surface?.title, activity: state.activity.slice(0, 12) }, null, 2));
     return;
@@ -24,50 +24,8 @@ async function main() {
     console.log(JSON.stringify({ replayed: target, surface: state.surface?.title, status: state.status }, null, 2));
     return;
   }
-  if (command === "eval" || command === "eval-live") {
-    const live = command === "eval-live";
-    if (live) {
-      const { resolveModelConfig } = await import("./provider.js");
-      if (!process.env.MODEL_PROVIDER || process.env.MODEL_PROVIDER === "fixture") {
-        process.env.MODEL_PROVIDER = process.env.EXPLABS_API_KEY ? "explabs" : process.env.XAI_API_KEY ? "xai" : "openai";
-      }
-      if (!process.env.MODEL_EXECUTION_MODE) process.env.MODEL_EXECUTION_MODE = "live-strict";
-      if (!resolveModelConfig().apiKey) {
-        console.error("eval:live requires EXPLABS_API_KEY (or XAI_API_KEY / MODEL_API_KEY)");
-        process.exitCode = 2;
-        return;
-      }
-    }
-    const repeats = Number(process.env.EVAL_REPEATS ?? 3);
-    const matrixRepeats = Number(process.env.EVAL_MATRIX_REPEATS ?? 1);
-    const { runEvalSuite } = await import("./eval/suite.js");
-    const report = await runEvalSuite({ repeats, live, matrixRepeats });
-    console.log(JSON.stringify({
-      live: report.live,
-      provider: report.provider,
-      executionMode: report.executionMode,
-      total: report.total,
-      passed: report.passed,
-      passedWithoutSubstitution: report.passedWithoutSubstitution,
-      substitutedRuns: report.substitutedRuns,
-      rate: report.rate,
-      strictRate: report.strictRate,
-      latency: report.latency,
-      tokens: report.tokens,
-      suites: {
-        investigation: { total: report.suites.investigation.total, passed: report.suites.investigation.passed, rate: report.suites.investigation.rate },
-        matrix: { total: report.suites.matrix.total, passed: report.suites.matrix.passed, rate: report.suites.matrix.rate, strictRate: report.suites.matrix.strictRate },
-      },
-      matrixByCell: report.matrixByCell,
-      matrixCases: report.suites.matrix.total,
-      investigationRuns: report.suites.investigation.total,
-      failed: report.failedRows,
-    }, null, 2));
-    if (live && report.executionMode === "live-strict" && report.strictRate < 0.9) process.exitCode = 1;
-    else if (live && report.rate < 0.9) process.exitCode = 1;
-    return;
-  }
-  console.log(JSON.stringify(publicState(), null, 2));
+  console.error("Usage: tsx src/cli.ts investigate [question] | replay [--run id]");
+  process.exitCode = 1;
 }
 
 await main();

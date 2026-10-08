@@ -2,7 +2,7 @@ import { z } from "zod";
 import { EntityRefSchema, TimeWindowSchema } from "./entities.js";
 import { AgentFindingSchema } from "./findings.js";
 
-export const DomainSchema = z.enum(["reliability", "product", "customer", "finance"]);
+export const DomainSchema = z.enum(["network", "shipments", "last_mile", "customers"]);
 export const TaskStatusSchema = z.enum(["pending", "running", "completed", "partial", "failed", "cancelled"]);
 
 export const InvestigationTaskSchema = z.object({

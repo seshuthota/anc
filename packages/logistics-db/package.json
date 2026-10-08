@@ -1,22 +1,19 @@
 {
-  "name": "@anc/company-mcp",
+  "name": "@anc/logistics-db",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/server.ts",
-    "./tools": "./src/tools.ts"
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./seed": "./src/seed.ts"
   },
   "scripts": {
-    "dev": "tsx src/server.ts",
+    "seed": "tsx src/seed.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@anc/database": "workspace:*",
-    "@anc/policy": "workspace:*",
-    "@modelcontextprotocol/server": "^2.0.0",
-    "better-sqlite3": "^12.4.1",
-    "zod": "^4.1.12"
+    "better-sqlite3": "^12.4.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
