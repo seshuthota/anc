@@ -14,6 +14,7 @@
     "investigate": "pnpm --filter @anc/agent investigate",
     "replay": "pnpm --filter @anc/agent replay",
     "test:e2e": "pnpm --filter @anc/web test:e2e",
+    "eval:briefing": "pnpm --filter @anc/agent eval:briefing",
     "backup": "pnpm --filter @anc/agent backup",
     "logistics:seed": "pnpm --filter @anc/logistics-db seed"
   },

@@ -60,6 +60,6 @@ Same network and clock with nothing wrong. The briefing should report that nothi
 
 Replay without model calls: `pnpm replay`.
 
-Evaluation: the older investigation rubric and live eval harness scripts are **not on this branch**. A parcel briefing eval is planned in Slice 6 of the agent-first briefing plan. Until then, use `pnpm test`, `pnpm test:e2e`, and `pnpm investigate`.
+Evaluation: `pnpm eval:briefing` checks the morning briefing for every persona on `hub-fault` (exactly one primary finding) and `quiet-day` (none), the figure, budget and evidence rules, and an Escalate / Notify / Assign round-trip against the company database. It runs in fixture mode by default; results are in [evaluation-results.md](evaluation-results.md). `pnpm test`, `pnpm test:e2e` and `pnpm investigate` cover the rest. The older investigation rubric and live eval harness scripts are not on this branch.
 
 Pre-parcel wording for this document is preserved in [archive/pre-parcel-demo-scenario-2026-10-08.md](archive/pre-parcel-demo-scenario-2026-10-08.md).

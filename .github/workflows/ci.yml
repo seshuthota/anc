@@ -1,0 +1,69 @@
+# Pre-merge checks for the agent-first briefing (plan Slice 6, gate G0).
+# Everything runs in fixture mode: no model key and no network calls to a model.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODEL_PROVIDER: fixture
+      MODEL_EXECUTION_MODE: fixture
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # Version comes from "packageManager" in package.json.
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Composer DB-isolation gate (must print nothing)
+        run: |
+          if git grep -n -E "logistics-db|mcp-client|better-sqlite3" -- apps/agent/src/composer.ts apps/agent/src/ui-composer.ts; then
+            echo "::error::the UI composer must not import the company database or its MCP client"
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Briefing eval (fixture mode, must be 100%)
+        run: pnpm eval:briefing
+
+      - name: Install Playwright Chrome
+        run: pnpm --filter @anc/web exec playwright install --with-deps chrome
+
+      - name: End-to-end (Playwright, Chrome)
+        run: pnpm test:e2e
+
+      - name: Upload eval report, screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results/
+            apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

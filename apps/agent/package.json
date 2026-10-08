@@ -10,7 +10,8 @@
     "replay": "tsx src/cli.ts replay",
     "backup": "tsx src/backup-cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:briefing": "tsx src/eval/briefing.ts"
   },
   "dependencies": {
     "@anc/config": "workspace:*",

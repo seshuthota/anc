@@ -31,6 +31,12 @@ describe("briefing action catalog (R6)", () => {
     expect(selectBriefingActions({ primary: atRisk, related: [fault], principal: coo, completed: new Set(["escalate_equipment_fault:eq-hyd-0920"]) })).toEqual([]);    expect(selectBriefingActions({ primary: atRisk, related: [fault, shipper], metricId: "parcels_at_risk_today", principal: coo, completed: new Set(["notify_shipper:shipper-003", "assign_complaints:late-at-risk"]) }).map((action) => action.id)).toEqual(["escalate_equipment_fault"]);
   });
 
+  it("offers the care lead Assign when the unowned complaint queue itself leads the briefing", () => {
+    const care = resolvePrincipal("user-care");
+    expect(selectBriefingActions({ primary: atRisk, related: [], metricId: "complaints_open_unassigned", principal: care }).map((action) => action.id)).toEqual(["assign_complaints"]);
+    expect(selectBriefingActions({ primary: atRisk, related: [], metricId: "hub_sort_rate_last_hour", principal: care })).toEqual([]);
+  });
+
   it("offers nothing when there is no principal: no principal means no grants (Reviewer M6)", () => {
     expect(selectBriefingActions({ primary: atRisk, related: [fault, shipper], metricId: "parcels_at_risk_today" })).toEqual([]);
   });

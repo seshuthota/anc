@@ -50,6 +50,9 @@ export type SpecialistDefinition = {
   budget: { maxToolCalls: number };
 };
 
+/** Unowned open complaints at or above this count are a spike (high severity), not routine. */
+export const COMPLAINT_SPIKE = 10;
+
 const cap = (tool: string, domain: Domain, description: string, extra: Partial<CapabilityDefinition> = {}): CapabilityDefinition => ({
   id: TOOL_CAPABILITIES[tool]!, tool, domain, description, sideEffect: "read", ...extra,
 });
@@ -159,7 +162,9 @@ export const CAPABILITIES: CapabilityDefinition[] = [
       path: "totals.unassigned",
       title: ({ value }) => value ? `${value} complaint${value === 1 ? " needs" : "s need"} an owner` : "No unassigned complaints",
       summary: ({ value }) => value ? "Open complaints with no assignee in the care queue." : "Every open complaint has an owner.",
-      severity: (value) => (value > 0 ? "medium" : "info"),
+      // A queue of ten or more complaints with no owner is a spike the care team acts on
+      // this morning (14 on the fault day, 1 on a quiet day); a few are routine.
+      severity: (value) => (value >= COMPLAINT_SPIKE ? "high" : value > 0 ? "medium" : "info"),
     },
   }),
   cap("list_eligible_assignees", "customers", "People who can own a complaint", { internal: true }),

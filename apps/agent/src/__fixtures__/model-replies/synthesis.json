@@ -1,0 +1,17 @@
+{
+  "replies": [
+    {
+      "headline": "A sorter fault has left 1,400 parcels at risk today",
+      "primaryFindingId": "finding-invented",
+      "whyItMatters": "Every one of them is late.",
+      "steps": [{ "text": "The belt is down.", "kind": "observed", "findingIds": ["finding-invented"] }]
+    },
+    {
+      "headline": "{{primary.title}}",
+      "primaryFindingId": "{{primaryFindingId}}",
+      "whyItMatters": "It is the one issue to act on first this morning.",
+      "confidence": "high",
+      "steps": [{ "text": "{{primary.summary}}", "kind": "observed", "findingIds": ["{{primaryFindingId}}"] }]
+    }
+  ]
+}

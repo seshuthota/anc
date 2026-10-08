@@ -31,10 +31,11 @@ Commands:
 | `pnpm investigate -- "What should I care about this morning?"` | CLI investigation |
 | `pnpm replay` | Restore last accepted surface |
 | `pnpm test` | Deterministic unit/integration tests |
-| `pnpm test:e2e` | Fixture-backed Playwright smoke (needs Google Chrome; ports 4110/3010) |
+| `pnpm test:e2e` | Fixture-backed Playwright suite (needs Google Chrome; ports 4110/3010 by default, move them with `E2E_AGENT_PORT` / `E2E_WEB_PORT`) |
+| `pnpm eval:briefing` | Morning-briefing eval: 2 scenarios × 5 personas, R1–R4 checks and an action round-trip. Fixture mode by default (deterministic, no model key); exits 1 on any failed check and writes `test-results/eval-briefing.json` |
 | `pnpm backup` | Snapshot the runtime and company databases into `data/backups/` |
 
-Briefing eval scripts (`eval:briefing`, live-strict / live-fallback variants) are **planned in Slice 6** of the agent-first briefing plan and are not available on this branch.
+`pnpm eval:briefing` runs against its own freshly seeded (schema v2) `hub-fault` and `quiet-day` databases in a temporary directory, so it never touches `data/`. Live mode is report-only: `MODEL_PROVIDER=explabs MODEL_EXECUTION_MODE=live-strict EVAL_REPEATS=5 pnpm eval:briefing` (needs a model key; prints a pass rate and always exits 0). `EVAL_REPORT=<path>` moves the JSON report. CI (`.github/workflows/ci.yml`) runs typecheck, unit tests, the fixture eval, the composer DB-isolation grep and the Playwright suite.
 
 The workspace page streams `POST /runtime/investigate` as SSE. CopilotKit at `/api/copilotkit` is an optional unused bridge, not the shell transport.
 

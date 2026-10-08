@@ -15,12 +15,15 @@ test("cancels the first run before a workspace is accepted", async ({ page }) =>
 
 test("shows progress, completes an investigation, and restores it on refresh", async ({ page }) => {
   await page.goto("/");
-  // Wait for the auto-briefing surface title (non-empty h2). Strict title assertions come later.
-  const heading = page.locator(".a2ui-root h2");
+  // The e2e company database is seeded with hub-fault: the briefing must lead with
+  // one primary finding, never the calm "Nothing needs your attention" line.
+  await expect(page.locator('[data-a2ui="PrimaryFinding"]')).toHaveCount(1, { timeout: 90_000 });
+  const heading = page.locator(".a2ui-root h2").first();
   await expect(heading).toBeVisible({ timeout: 60_000 });
   await expect(heading).not.toHaveText("", { timeout: 60_000 });
   const title = (await heading.innerText()).trim();
   expect(title.length).toBeGreaterThan(0);
+  expect(title).not.toMatch(/Nothing needs your attention/i);
   await page.reload();
   await expect(heading).toHaveText(title);
 });

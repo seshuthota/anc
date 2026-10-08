@@ -15,6 +15,10 @@ export function displayTime(value: string): string {
 
 /** Formats a cell for reading. The raw value stays in the evidence record. */
 export function displayCell(field: string, value: unknown): string {
+  // Durations in hours ("hoursToClearAtCurrentRate") are hours, not a rate: checked
+  // before the rate rule, which their name would otherwise match. An empty hub (0)
+  // or one that is not sorting at all (null) has nothing to clear at a rate: a dash.
+  if (/^hours/i.test(field)) return typeof value === "number" && value > 0 ? `${value.toLocaleString("en-IN", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} h` : "—";
   if (value === undefined || value === null) return "";
   if (typeof value === "number" && /rate|occupancy|target/i.test(field) && value >= 0 && value <= 1) return `${(value * 100).toFixed(1)}%`;
   if (typeof value === "number") return value.toLocaleString("en-IN");

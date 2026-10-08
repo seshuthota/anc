@@ -1,0 +1,17 @@
+{
+  "replies": [
+    {
+      "components": [
+        { "id": "root", "component": "Column", "children": ["$blocks", "rp_tile", "rp_card", "$actions", "$rest", "$quiet"] },
+        { "id": "rp_tile", "component": "Stat", "label": "Headline", "value": { "path": "/briefing/quiet/count" }, "tone": "alert" },
+        { "id": "rp_card", "component": "Card", "child": "rp_card_text" },
+        { "id": "rp_card_text", "component": "Text", "text": { "path": "/title" } }
+      ]
+    },
+    {
+      "components": [
+        { "id": "root", "component": "Column", "children": ["$blocks", "$actions", "$rest", "$quiet"] }
+      ]
+    }
+  ]
+}

@@ -85,8 +85,8 @@ export function selectBriefingActions(input: {
       actions.push({ id: action.id, label: `Notify ${hit.entity.label ?? hit.entity.id}`, entities: [{ type: "shipper", id: hit.entity.id, ...(hit.entity.label ? { label: hit.entity.label } : {}) }] });
     } else if (action.id === "assign_complaints") {
       // Late complaints are tied to parcels at risk today: offered when that is the
-      // primary's figure. Which complaints is decided when it is proposed.
-      if (input.metricId !== "parcels_at_risk_today" || done(action.id, "late-at-risk")) continue;
+      // primary's figure, or the queue itself is. Which complaints is decided when it is proposed.
+      if ((input.metricId !== "parcels_at_risk_today" && input.metricId !== "complaints_open_unassigned") || done(action.id, "late-at-risk")) continue;
       actions.push({ id: action.id, label: "Assign late complaints", entities: [] });
     }
   }
