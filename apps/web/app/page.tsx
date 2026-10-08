@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { A2UIWorkspace, type A2UIMessage } from "../lib/a2ui";
+import { EvidenceDrawer, type EvidenceDrawerState, type EvidenceExplanation, type EvidenceItem } from "../lib/EvidenceDrawer";
 import {
   activityKindLabel,
   agentUrl,
@@ -45,7 +46,7 @@ export default function HomePage() {
   const [state, setState] = useState<PublicState>(emptyState);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
-  const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null);
+  const [evidence, setEvidence] = useState<EvidenceDrawerState | null>(null);
   const [developerOpen, setDeveloperOpen] = useState(false);
   // The landing view is only a question box. A surface takes over once asked for.
   const [home, setHome] = useState(true);
@@ -230,10 +231,24 @@ export default function HomePage() {
 
   async function invoke(name: string, context: Record<string, unknown> = {}) {
     if (name === "show_evidence") {
-      const evidenceId = String(context.evidenceId ?? (Array.isArray(context.evidenceIds) ? context.evidenceIds[0] : ""));
-      if (!evidenceId) return;
-      const response = await fetch(endpoint(`/runtime/evidence/${encodeURIComponent(evidenceId)}`), { headers: authHeaders(), credentials: sessionAuth.current ? "include" : "same-origin" });
-      setEvidence(response.ok ? await response.json() as Record<string, unknown> : { error: "Evidence not found" });
+      // Every cited record, each explained by the runtime (grant-checked, redacted, no model).
+      const ids = [...new Set([context.evidenceId, ...(Array.isArray(context.evidenceIds) ? context.evidenceIds : [])]
+        .filter((id): id is string => typeof id === "string" && id.length > 0))];
+      if (!ids.length) return;
+      const metricId = typeof context.metricId === "string" ? context.metricId : undefined;
+      const resultPath = typeof context.resultPath === "string" ? context.resultPath : undefined;
+      const query = new URLSearchParams({ ...(metricId ? { metricId } : {}), ...(resultPath ? { path: resultPath } : {}) }).toString();
+      const items = await Promise.all(ids.map(async (evidenceId): Promise<EvidenceItem> => {
+        try {
+          const response = await fetch(endpoint(`/runtime/evidence/${encodeURIComponent(evidenceId)}/explain${query ? `?${query}` : ""}`), { headers: authHeaders(), credentials: sessionAuth.current ? "include" : "same-origin" });
+          if (response.status === 403) return { evidenceId, error: "You do not have access to this record." };
+          if (!response.ok) return { evidenceId, error: "Evidence not found" };
+          return { evidenceId, explanation: await response.json() as EvidenceExplanation };
+        } catch {
+          return { evidenceId, error: "Evidence could not be loaded" };
+        }
+      }));
+      setEvidence({ items, ...(metricId ? { metricId } : {}), ...(resultPath ? { resultPath } : {}) });
       return;
     }
     // Going deeper into a topic is a new question, shown like one the person typed.
@@ -258,7 +273,7 @@ export default function HomePage() {
         principalId,
       }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : principalId, sessionAuth.current ? { base: runtimeBase.current, credentials: "include" } : undefined);
       const snapshot = (await fetch(`${endpoint("/runtime/state")}?threadId=${encodeURIComponent(state.threadId)}`, { headers: authHeaders(), credentials: sessionAuth.current ? "include" : "same-origin" }).then((response) => response.json()).catch(() => null)) as PublicState | null;
-      if (snapshot?.evidence) setEvidence(snapshot.evidence);
+      if (snapshot?.evidence) setEvidence({ items: [{ evidenceId: String(snapshot.evidence.evidenceId ?? "evidence"), raw: snapshot.evidence }] });
     } catch (error) {
       if (currentRunId.current !== runId) return;
       setState((current) => ({
@@ -429,18 +444,7 @@ export default function HomePage() {
           </aside>
         </div>
       )}
-      {evidence ? (
-        <div className="drawer" role="dialog" aria-modal="true" aria-label="Supporting evidence">
-          <div className="drawer-card">
-            <div className="workspace-heading">
-              <div><h2>Where this came from</h2><p className="muted">Company tool: {String(evidence.tool ?? "saved record").replaceAll("_", " ")}</p></div>
-              <button className="ghost" type="button" autoFocus onClick={() => setEvidence(null)}>Close</button>
-            </div>
-            <p className="muted">{String(evidence.evidenceId ?? "")}</p>
-            <pre>{JSON.stringify(evidence, null, 2)}</pre>
-          </div>
-        </div>
-      ) : null}
+      {evidence ? <EvidenceDrawer key={evidence.items.map((item) => item.evidenceId).join("|")} state={evidence} onClose={() => setEvidence(null)} /> : null}
     </main>
   );
 }

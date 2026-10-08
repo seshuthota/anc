@@ -112,4 +112,91 @@ describe("agent HTTP", () => {
     expect(current.runId).toBe(newer.runId);
     delete process.env.INVESTIGATION_STEP_DELAY_MS;
   }, 60_000);
+
+  describe("evidence explain", () => {
+    const as = (principalId: string) => ({ "x-anc-principal": principalId });
+    let atRiskId = "";
+    let state: { surface: { surfaceId: string; revision: number; dataModel: { briefing: { primary: { metric: { evidenceIds: string[]; metricId: string; resultPath: string }; evidenceIds: string[] } } } } };
+
+    it("prepares a briefing to explain", async () => {
+      const response = await fetch(`${base}/runtime/investigate`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...as("user-coo") },
+        body: JSON.stringify({ question: "Brief me: what needs my attention this morning?" }),
+      });
+      state = await response.json() as typeof state;
+      const metric = state.surface.dataModel.briefing.primary.metric;
+      expect(metric).toMatchObject({ metricId: "parcels_at_risk_today", resultPath: "totals.atRisk" });
+      atRiskId = metric.evidenceIds[0]!;
+      expect(atRiskId).toMatch(/^summarize_at_risk_shipments-/);
+    }, 60_000);
+
+    it("explains the headline figure from the registry and the stored envelope", async () => {
+      const url = `${base}/runtime/evidence/${encodeURIComponent(atRiskId)}/explain?metricId=parcels_at_risk_today&path=totals.atRisk`;
+      const response = await fetch(url, { headers: as("user-coo") });
+      expect(response.status).toBe(200);
+      const body = await response.json() as Record<string, any>;
+      expect(Object.keys(body)).toEqual(expect.arrayContaining(["definition", "window", "denominator", "value", "path", "tool", "filters", "dataAsOf", "excerpt", "raw"]));
+      expect(body.definition.text).toBe("Promised for delivery today, not yet on a truck");
+      expect(body.definition.scope).toEqual({ type: "network" });
+      expect(body.window).toEqual({ id: "today", label: "Today · as of 07:00 IST" });
+      expect(body.value).toBe(905);
+      expect(body.path).toBe("totals.atRisk");
+      expect(body.tool).toBe("summarize_at_risk_shipments");
+      expect(body.denominator).toMatchObject({ metricId: "parcels_promised_today", value: 4000 });
+      expect(body.dataAsOf).toMatch(/^2026-09-21T07:00/);
+      expect(body.excerpt.rows.length).toBeLessThanOrEqual(10);
+      const highlighted = body.excerpt.rows[body.excerpt.highlight.row];
+      expect(highlighted).toEqual(["atRisk", 905]);
+      expect(body.excerpt.highlight.column).toBe("value");
+      expect(body.raw.evidenceId).toBe(atRiskId);
+      // Deterministic: the same request gives the same answer.
+      expect(await fetch(url, { headers: as("user-coo") }).then((again) => again.json())).toEqual(body);
+    });
+
+    it("rejects a path that is another metric's source and an unknown id", async () => {
+      const mismatch = await fetch(`${base}/runtime/evidence/${encodeURIComponent(atRiskId)}/explain?metricId=parcels_at_risk_today&path=totals.promisedToday`, { headers: as("user-coo") });
+      expect(mismatch.status).toBe(400);
+      const missing = await fetch(`${base}/runtime/evidence/nope/explain`, { headers: as("user-coo") });
+      expect(missing.status).toBe(404);
+    });
+
+    it("refuses locker evidence to the care lead with a 403", async () => {
+      store.saveEvidence({
+        evidenceId: "list_locker_sites-care-test",
+        runId: "run-care",
+        tool: "list_locker_sites",
+        payload: { evidenceId: "list_locker_sites-care-test", tool: "list_locker_sites", result: { rows: [{ id: "lock-1", inboundWithoutSpace: 16 }] } },
+        payloadHash: "hash",
+        now: "2026-09-21T01:30:00.000Z",
+        ownerId: "user-care",
+      });
+      const real = store.findEvidenceByToolArgs("list_locker_sites", {})?.evidenceId;
+      for (const id of ["list_locker_sites-care-test", ...(typeof real === "string" ? [real] : [])]) {
+        const explain = await fetch(`${base}/runtime/evidence/${encodeURIComponent(id)}/explain?metricId=locker_inbound_without_space&path=rows.0.inboundWithoutSpace`, { headers: as("user-care") });
+        expect(explain.status, id).toBe(403);
+        expect(JSON.stringify(await explain.json())).not.toContain("inboundWithoutSpace");
+        const plain = await fetch(`${base}/runtime/evidence/${encodeURIComponent(id)}`, { headers: as("user-care") });
+        expect(plain.status, id).toBe(403);
+      }
+      // The last-mile lead holds the locker grant and owns nothing here: not found, not forbidden.
+      const owner = await fetch(`${base}/runtime/evidence/list_locker_sites-care-test/explain`, { headers: as("user-lastmile") });
+      expect(owner.status).toBe(404);
+    });
+
+    it("opens every cited evidence id from a show_evidence action", async () => {
+      const ids = state.surface.dataModel.briefing.primary.evidenceIds;
+      expect(ids.length).toBeGreaterThan(1);
+      const response = await fetch(`${base}/runtime/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...as("user-coo") },
+        body: JSON.stringify({ actionId: `act-${Date.now()}`, name: "show_evidence", surfaceId: state.surface.surfaceId, surfaceRevision: state.surface.revision, parameters: { evidenceIds: ids, metricId: "parcels_at_risk_today", resultPath: "totals.atRisk" } }),
+      });
+      expect(response.status).toBe(200);
+      const opened = await response.json() as { evidence: { evidenceId: string }; evidenceList: Array<{ evidenceId: string; error?: string }> };
+      expect(opened.evidenceList.map((item) => item.evidenceId)).toEqual(ids);
+      expect(opened.evidenceList.every((item) => !item.error)).toBe(true);
+      expect(opened.evidence.evidenceId).toBe(ids[0]);
+    });
+  });
 });

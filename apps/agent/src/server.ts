@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { ORGANIZATION_ID, PRINCIPAL_HEADER, TOOL_CAPABILITIES, authMode, hasGrant, isDemoMode, listPersonas, resolvePrincipal, sessionThreadId, type Principal } from "@anc/policy";
+import { ORGANIZATION_ID, PRINCIPAL_HEADER, authMode, hasGrant, isDemoMode, listPersonas, resolvePrincipal, sessionThreadId, type Principal } from "@anc/policy";
 import { connectorHealth, externalReadGrant, externalWriteGrant, readExternalRecords } from "./connectors.js";
 import { listEvents, subscribeRun, type AgentEvent } from "./events.js";
+import { ExplainError, explainEvidence, openEvidence } from "./evidence-explain.js";
 import { executeExternalWrite } from "./external-write.js";
 import { allowRequest, auditTokenOk, clientKey, hopPrincipal, originAllowed, sameTenant } from "./http-guard.js";
 import { recordOutcome } from "./metrics.js";
@@ -278,12 +279,22 @@ export function createAgentServer() {
     if (request.method === "GET" && url.pathname.startsWith("/runtime/evidence/")) {
       try {
         const principal = principalFrom(request);
-        const evidenceId = decodeURIComponent(url.pathname.slice("/runtime/evidence/".length));
-        const record = store.getEvidenceRecord(evidenceId, principal.id);
-        if (!record) return send(404, { error: "evidence not found" });
-        const capability = TOOL_CAPABILITIES[record.tool];
-        if (capability && !hasGrant(principal, capability)) return send(403, { error: "Not authorized for this evidence" });
-        return send(200, record.payload);
+        const rest = url.pathname.slice("/runtime/evidence/".length);
+        const explain = rest.endsWith("/explain");
+        const evidenceId = decodeURIComponent(explain ? rest.slice(0, -"/explain".length) : rest);
+        // Capability first, then ownership; the payload is redacted for this person either way.
+        const access = openEvidence(store, principal, evidenceId);
+        if (access.status !== 200) {
+          if (access.status === 403) audit(principal.id, "evidence.open", "denied", evidenceId);
+          return send(access.status, { error: access.error });
+        }
+        if (!explain) return send(200, access.payload);
+        try {
+          return send(200, explainEvidence(evidenceId, access.payload, { metricId: url.searchParams.get("metricId"), path: url.searchParams.get("path") }));
+        } catch (error) {
+          if (error instanceof ExplainError) return send(400, { error: error.message });
+          throw error;
+        }
       } catch (error) {
         return send(authStatus(error), { error: error instanceof Error ? error.message : "not authorized" });
       }

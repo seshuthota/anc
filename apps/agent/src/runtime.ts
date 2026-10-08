@@ -13,6 +13,7 @@ import { assertUsdBudgetCanBeEnforced, priceCost, takeUsage, type ModelUsage } f
 import { DEMO_OWNER_ID, redactForPrincipal, resolvePrincipal, sessionThreadId, withoutGrants, type Principal } from "@anc/policy";
 import { commitComplaintAssignment, prepareComplaintAssignment, selectComplaintAssignee } from "./operations.js";
 import { DEFAULT_THREAD_ID } from "./windows.js";
+import { openEvidence } from "./evidence-explain.js";
 
 const db = openRuntimeDatabase(process.env.RUNTIME_DB_PATH ?? DEFAULT_RUNTIME_DB_PATH);
 export const store = new RuntimeStore(db);
@@ -52,7 +53,10 @@ export type PublicState = {
     completedMs: number;
   };
   usage?: ModelUsage & { estimatedCostUsd: number | null; costStatus: "known" | "unknown" };
-}
+  /** Opened by show_evidence: the first record, and every cited record in order. */
+  evidence?: Record<string, unknown> | null;
+  evidenceList?: Array<Record<string, unknown>>;
+};
 
 function principalNow(ownerId: string): Principal {
   return withoutGrants(resolvePrincipal(ownerId), store.listRevocations(ownerId));
@@ -77,7 +81,7 @@ function visibleSurface(surface: NonNullable<ReturnType<typeof store.getSurface>
     messages: redactForPrincipal(principal, surface.messages),
     dataModel: redactForPrincipal(principal, surface.dataModel),
   };
-};
+}
 
 function executionTrace(runId: string | null): ExecutionTrace {
   return {
@@ -341,9 +345,15 @@ export async function handleAction(raw: Record<string, unknown>, principal = res
     throw new Error("stale surface action");
   }
   if (action.name === "show_evidence") {
-    const evidenceId = String(action.parameters.evidenceId ?? (Array.isArray(action.parameters.evidenceIds) ? action.parameters.evidenceIds[0] : ""));
+    // Every cited id, not just the first: a finding can rest on several records.
+    const evidenceIds = [...new Set([action.parameters.evidenceId, ...(Array.isArray(action.parameters.evidenceIds) ? action.parameters.evidenceIds : [])]
+      .filter((id): id is string => typeof id === "string" && id.length > 0))];
     store.appendActivity({ id: randomUUID(), threadId, message: `Opened supporting evidence`, kind: "action", now: new Date().toISOString(), ownerId: principal.id });
-    return { ...publicState(threadId, principal.id), evidence: evidenceId ? store.getEvidence(evidenceId, principal.id) ?? { error: "not authorized" } : null } as PublicState;
+    const opened = evidenceIds.map((evidenceId) => {
+      const access = openEvidence(store, principal, evidenceId);
+      return access.status === 200 ? access.payload : { evidenceId, error: access.status === 403 ? "not authorized" : "not found" };
+    });
+    return { ...publicState(threadId, principal.id), evidence: opened[0] ?? null, evidenceList: opened } as PublicState;
   }
   if (action.name === "prepare_assignment") {
     const complaintId = String(action.entities[0]?.id ?? action.parameters.entityId ?? action.parameters.rowId ?? "");

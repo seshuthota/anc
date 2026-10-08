@@ -284,3 +284,22 @@ button { cursor: pointer; }
 .ws-collapsible > summary { color: var(--ink-soft); cursor: pointer; font-weight: 600; }
 .ws-collapsible[open] > summary { margin-bottom: 12px; }
 .ws-collapsible-body .ws-row { align-items: center; }
+
+/* Evidence drawer (host component, Slice 3) */
+.ev-tabs { border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0 16px; }
+.ev-tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: inherit; cursor: pointer; font: inherit; padding: 8px 12px; text-transform: capitalize; }
+.ev-tab.is-active { border-bottom-color: #1b1f4b; font-weight: 600; }
+.ev-definition { margin: 8px 0 16px; }
+.ev-label { font-weight: 600; margin: 0; }
+.ev-value { font-size: 40px; font-weight: 700; margin: 4px 0; }
+.ev-value mark, .ev-hit { background: #ffe58a; border-radius: 4px; padding: 0 4px; }
+.ev-text { margin: 0 0 4px; }
+.ev-meta { display: grid; gap: 6px 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 0 16px; }
+.ev-meta dt { color: var(--muted, #6b6f80); font-size: 12px; }
+.ev-meta dd { margin: 0; }
+.ev-excerpt table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.ev-excerpt th, .ev-excerpt td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+.ev-excerpt tr.is-highlighted { background: #fff8d6; }
+.ev-hit { font-weight: 700; }
+.ev-raw { margin-top: 16px; }
+.ev-error { color: #b42318; }

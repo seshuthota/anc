@@ -13,14 +13,15 @@ const CHECKED: Record<Domain, string> = {
 };
 const DOMAIN_ORDER: Domain[] = ["network", "shipments", "last_mile", "customers"];
 
-const asOf = () => `${DEMO_CLOCK.slice(11, 16)} IST`;
+const asOfLabel = (asOf: string = DEMO_CLOCK) => `${asOf.slice(11, 16)} IST`;
 
-function windowLabel(window: string): string {
+/** How a metric window reads to a person, at the data's as-of time. */
+export function windowLabel(window: string, asOf?: string): string {
   switch (window) {
-    case "today": return `Today · as of ${asOf()}`;
-    case "last_hour": return `Last hour to ${asOf()}`;
+    case "today": return `Today · as of ${asOfLabel(asOf)}`;
+    case "last_hour": return `Last hour to ${asOfLabel(asOf)}`;
     case "commitment_13d": return "Commitment period: the 13 days before today";
-    default: return `As of ${asOf()}`;
+    default: return `As of ${asOfLabel(asOf)}`;
   }
 }
 

@@ -359,6 +359,12 @@ export class RuntimeStore {
     return { id: row.id, status: row.status, payload: JSON.parse(row.payload) as Record<string, unknown> };
   }
 
+  /** The tool an evidence record came from, whoever owns it; used to check the capability before ownership. */
+  getEvidenceTool(evidenceId: string): string | undefined {
+    const row = this.db.prepare("SELECT tool FROM evidence WHERE evidence_id = ?").get(evidenceId) as { tool: string } | undefined;
+    return row?.tool;
+  }
+
   getEvidenceRecord(evidenceId: string, ownerId: string): { tool: string; payload: Record<string, unknown> } | undefined {
     const row = this.db.prepare("SELECT tool, payload FROM evidence WHERE evidence_id = ? AND owner_id = ?").get(evidenceId, ownerId) as
       | { tool: string; payload: string }
