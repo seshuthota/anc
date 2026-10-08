@@ -5,6 +5,7 @@ import { recordSubstitution } from "./execution.js";
 import { resolveExecutionMode, resolveModelConfig } from "./provider.js";
 import { authorizedCapabilities, CAPABILITIES, SPECIALISTS, type CapabilityDefinition } from "./registry.js";
 import { recordUsage } from "./usage.js";
+import { DEMO_CLOCK } from "./windows.js";
 
 export type PlannedTask = {
   domain: Domain;
@@ -34,6 +35,8 @@ const WRITE_INTENT = /(?<![a-z])assign(?![a-z])|(?<![a-z])reassign(?![a-z])|\bse
 
 export type PlanModelRequest = {
   objective: string;
+  /** The workspace clock, so "this week" or "overnight" can be resolved without asking. */
+  now: string;
   user: { id: string; title: string; priorities: string[] };
   selectedEntities: EntityRef[];
   completedCapabilities: string[];
@@ -312,6 +315,7 @@ function draftRequest(
 function planRequest(input: { objective: string; principal: Principal; selectedEntities?: EntityRef[]; completedCapabilities?: string[] }): PlanModelRequest {
   return {
     objective: input.objective,
+    now: DEMO_CLOCK,
     user: { id: input.principal.id, title: input.principal.title, priorities: input.principal.preferences.priorities },
     selectedEntities: input.selectedEntities ?? [],
     completedCapabilities: input.completedCapabilities ?? [],
@@ -355,7 +359,7 @@ async function livePlan(input: { objective: string; principal: Principal; select
     messages: [
       {
         role: "system",
-        content: "You are a workflow planner. Propose at most three specialist tasks using only the provided authorized capabilities. Never invent tools. Do not schedule write/commit tools. Skip capabilities listed as already completed. If affected account ids are present and an authorized exposure capability is not completed, you may add that task. If the request cannot be served, return unsupported. Return JSON {intent, view, tasks:[{domain,question,capabilities}], unsupported?, clarification?}. view is summary, table, form, comparison, or queue.",
+        content: "You are a workflow planner. Propose at most three specialist tasks using only the provided authorized capabilities. Never invent tools. Do not schedule write/commit tools. Skip capabilities listed as already completed. If affected account ids are present and an authorized exposure capability is not completed, you may add that task. If the request cannot be served, return unsupported. Resolve relative dates from the provided now instead of asking; specialists choose their own time windows. Ask for clarification only when a required record is not identified. Return JSON {intent, view, tasks:[{domain,question,capabilities}], unsupported?, clarification?}. view is summary (cross-domain overview), table (a list of records), comparison (records compared by a numeric column), queue (work items awaiting an owner), trend (a metric over time), or form.",
       },
       { role: "user", content: JSON.stringify(request) },
     ],

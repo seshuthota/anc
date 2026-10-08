@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { A2UIWorkspace, type A2UIMessage } from "../lib/a2ui";
 import {
   activityKindLabel,
@@ -15,12 +16,24 @@ import {
   type PublicState,
 } from "../lib/agent";
 
+const RUN_START = "Looking into your question";
+/** Asked on the person's behalf when they open the workspace, so they start from what needs attention. */
+const BRIEFING = "Brief me: what needs my attention this morning?";
+const briefedKey = (id: string) => `democo-briefed:${id}`;
+
 export default function HomePage() {
   const [state, setState] = useState<PublicState>(emptyState);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null);
   const [developerOpen, setDeveloperOpen] = useState(false);
+  // The landing view is only a question box. A surface takes over once asked for.
+  const [home, setHome] = useState(true);
+  // What the current question was, and what was on screen before it. While a
+  // question is being worked on, the earlier answer is not shown.
+  const [asked, setAsked] = useState("");
+  const [awaitingAnswer, setAwaitingAnswer] = useState(false);
+  const [priorSteps, setPriorSteps] = useState<Set<string> | null>(null);
   const [principalId, setPrincipalId] = useState("user-coo");
   const [personas, setPersonas] = useState<PrincipalSummary[]>([]);
   const [authMode, setAuthMode] = useState<"demo" | "oidc">("demo");
@@ -29,10 +42,26 @@ export default function HomePage() {
   const principalRef = useRef(principalId);
   const runtimeBase = useRef(agentUrl);
   const sessionAuth = useRef(false);
+  const openedFor = useRef<string | null>(null);
+  // Latest activity, readable from callbacks created before it arrived.
+  const activityRef = useRef<PublicState["activity"]>([]);
+  activityRef.current = state.activity;
   principalRef.current = principalId;
 
   function authHeaders(id = principalRef.current): Record<string, string> {
     return sessionAuth.current ? {} : principalHeaders(id);
+  }
+
+  /** Moves the question box between the centre and the top in place, without a page change. */
+  function morph(update: () => void) {
+    const start = (document as Document & { startViewTransition?: (callback: () => void) => unknown }).startViewTransition;
+    if (start) start.call(document, () => flushSync(update));
+    else update();
+  }
+
+  function showResults() {
+    morph(() => setHome(false));
+    if (window.location.hash !== "#view") window.history.replaceState(null, "", "#view");
   }
 
   function endpoint(path: string) {
@@ -98,7 +127,9 @@ export default function HomePage() {
       const restored = await response.json() as PublicState;
       if (currentRunId.current) return;
       setState(restored);
+      if (restored.status !== "running") openWorkspace(restored, id);
       if (restored.status === "running" && restored.runId) {
+        showResults();
         currentRunId.current = restored.runId;
         setBusy(true);
         const events = await fetch(`${endpoint("/runtime/events")}?threadId=${encodeURIComponent(restored.threadId)}&runId=${encodeURIComponent(restored.runId)}`, { headers, credentials });
@@ -126,22 +157,25 @@ export default function HomePage() {
     return "Waiting";
   }, [busy, state.status, state.surface]);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = question.trim();
+  async function ask(text: string, threadId = state.threadId, id = principalId, earlier = activityRef.current) {
+    const trimmed = text.trim();
     if (!trimmed || busy) return;
     const runId = `run-${crypto.randomUUID()}`;
     currentRunId.current = runId;
+    setAsked(trimmed);
+    setAwaitingAnswer(true);
+    setPriorSteps(new Set(earlier.map((item) => item.id)));
+    showResults();
     setBusy(true);
     setQuestion("");
     setState((current) => ({
       ...current,
       runId,
       status: "running",
-      activity: [{ id: crypto.randomUUID(), message: "Looking into your question", kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
+      activity: [{ id: crypto.randomUUID(), message: RUN_START, kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
     }));
     try {
-      await streamRequest("/runtime/investigate", { question: trimmed, threadId: state.threadId, runId, principalId }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : principalId, sessionAuth.current ? { base: runtimeBase.current, credentials: "include" } : undefined);
+      await streamRequest("/runtime/investigate", { question: trimmed, threadId, runId, principalId: id }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : id, sessionAuth.current ? { base: runtimeBase.current, credentials: "include" } : undefined);
     } catch (error) {
       if (currentRunId.current !== runId) return;
       setState((current) => ({
@@ -154,12 +188,37 @@ export default function HomePage() {
     }
   }
 
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void ask(question);
+  }
+
+  /**
+   * Opens on a briefing rather than a blank page. It is prepared once per
+   * browser session for each identity; after that the last view is shown.
+   */
+  function openWorkspace(restored: PublicState, id: string) {
+    // The mount effect can run twice in development; one briefing per identity is enough.
+    if (openedFor.current === id) return;
+    openedFor.current = id;
+    let briefed = false;
+    try { briefed = window.sessionStorage.getItem(briefedKey(id)) === "1"; } catch { /* storage unavailable */ }
+    if (briefed && restored.surface) { showResults(); return; }
+    try { window.sessionStorage.setItem(briefedKey(id), "1"); } catch { /* storage unavailable */ }
+    void ask(BRIEFING, restored.threadId, id, restored.activity);
+  }
+
   async function invoke(name: string, context: Record<string, unknown> = {}) {
     if (name === "show_evidence") {
       const evidenceId = String(context.evidenceId ?? (Array.isArray(context.evidenceIds) ? context.evidenceIds[0] : ""));
       if (!evidenceId) return;
       const response = await fetch(endpoint(`/runtime/evidence/${encodeURIComponent(evidenceId)}`), { headers: authHeaders(), credentials: sessionAuth.current ? "include" : "same-origin" });
       setEvidence(response.ok ? await response.json() as Record<string, unknown> : { error: "Evidence not found" });
+      return;
+    }
+    // Going deeper into a topic is a new question, shown like one the person typed.
+    if (name === "investigate" && typeof context.question === "string" && context.question.trim()) {
+      void ask(context.question);
       return;
     }
     const runId = `run-${crypto.randomUUID()}`;
@@ -198,7 +257,11 @@ export default function HomePage() {
       headers: { "content-type": "application/json", ...authHeaders() },
       body: JSON.stringify({ threadId: state.threadId, surfaceId: item.surfaceId, revision: item.revision }),
     });
-    if (response.ok) setState(await response.json() as PublicState);
+    if (response.ok) {
+      setState(await response.json() as PublicState);
+      setAwaitingAnswer(false);
+      showResults();
+    }
   }
 
   async function cancel() {
@@ -217,111 +280,132 @@ export default function HomePage() {
   }
 
   const substitutions = state.execution?.substitutions ?? [];
-  const currentPersona = personas.find((item) => item.id === principalId);
 
   async function switchPrincipal(nextId: string) {
     window.localStorage.setItem(PRINCIPAL_STORAGE_KEY, nextId);
     setPrincipalId(nextId);
     setEvidence(null);
+    setAsked("");
+    setAwaitingAnswer(false);
+    setPriorSteps(null);
     currentRunId.current = null;
     setBusy(false);
     const response = await fetch(endpoint("/runtime/state"), { headers: authHeaders(nextId) });
-    if (response.ok) setState(await response.json() as PublicState);
-    else setState({ ...emptyState, threadId: nextId === "user-coo" ? "local-demo" : `session:${nextId}` });
+    const next = response.ok
+      ? await response.json() as PublicState
+      : { ...emptyState, threadId: nextId === "user-coo" ? "local-demo" : `session:${nextId}` };
+    setState(next);
+    if (next.status !== "running") openWorkspace(next, nextId);
   }
 
+  const working = busy || state.status === "running";
+  // Steps of the current question only, oldest first.
+  const steps = useMemo(() => {
+    const newestFirst = priorSteps
+      ? state.activity.filter((item) => !priorSteps.has(item.id))
+      : state.activity.slice(0, state.activity.findIndex((item) => item.message === RUN_START) + 1 || state.activity.length);
+    return [...newestFirst].reverse();
+  }, [state.activity, priorSteps]);
+  // The earlier answer stays hidden until this question produces its own.
+  const superseded = awaitingAnswer && (working || state.status === "failed" || state.status === "cancelled");
+  const surface = superseded ? null : state.surface;
+  const pending = working && !surface;
+  const identity = authMode === "oidc" ? (
+    signedOut
+      ? <a className="ghost" href="/api/auth/login">Sign in</a>
+      : <form method="post" action="/api/auth/logout"><button className="ghost" type="submit">Sign out</button></form>
+  ) : (
+    <select className="persona-select" aria-label="Demo identity (not real sign-in)" value={principalId} onChange={(event) => void switchPrincipal(event.target.value)}>
+      {(personas.length ? personas : [{ id: "user-coo", displayName: "Casey Nguyen", title: "Chief Operating Officer" }]).map((item) => (
+        <option key={item.id} value={item.id}>{item.displayName} · {item.title}</option>
+      ))}
+    </select>
+  );
+
   return (
-    <main className="app-shell">
-      <a className="skip-link" href="#question">Skip to question</a>
-      <header className="topbar">
-        <div><span className="eyebrow">DEMOCO</span><h1>Morning workspace</h1></div>
+    <main className={home ? "app-shell home" : "app-shell"}>
+      <header className="masthead">
+        {home
+          ? <h1 className="wordmark">DemoCo</h1>
+          : <button className="wordmark" type="button" onClick={() => void ask(BRIEFING)} aria-label="DemoCo: refresh briefing" title="Refresh briefing">DemoCo</button>}
+        {signedOut ? <p className="muted">Sign in to use the workspace.</p> : (
+          <form className="question-form" onSubmit={submit} id="question">
+            <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask anything about the company" aria-label="Workspace question" autoFocus />
+            <button type="submit" disabled={busy || !question.trim()} aria-label="Ask">→</button>
+          </form>
+        )}
         <div className="connection">
-          <span className={`status-dot ${busy || state.status === "running" ? "running" : state.status === "failed" ? "failed" : ""}`} aria-hidden="true" />
-          <span aria-live="polite">{statusLabel}</span>
-          <span className="divider" />
-          <span>Sep 20, 2026 · 08:00 UTC</span>
-          {authMode === "oidc" ? (
-            signedOut
-              ? <a className="ghost" href="/api/auth/login">Sign in</a>
-              : <form method="post" action="/api/auth/logout"><button className="ghost" type="submit">Sign out</button></form>
-          ) : (
-            <label className="persona-switch">
-              <span>Demo identity</span>
-              <select aria-label="Demo identity (not real sign-in)" value={principalId} onChange={(event) => void switchPrincipal(event.target.value)}>
-                {(personas.length ? personas : [{ id: "user-coo", displayName: "Casey Nguyen", title: "Chief Operating Officer" }]).map((item) => (
-                  <option key={item.id} value={item.id}>{item.displayName}</option>
-                ))}
-              </select>
-            </label>
+          {home ? null : (
+            <>
+              <span className={`status-dot ${working ? "running" : state.status === "failed" ? "failed" : ""}`} aria-hidden="true" />
+              <span aria-live="polite">{statusLabel}</span>
+              {busy ? <button className="ghost" type="button" onClick={() => void cancel()}>Cancel</button> : null}
+            </>
           )}
-          {state.surfaceHistory.length > 1 ? <button className="ghost" type="button" onClick={() => restore(state.surfaceHistory[1]!)}>Back</button> : null}
-          {busy ? <button className="ghost" type="button" onClick={() => void cancel()}>Cancel</button> : null}
+          {identity}
         </div>
       </header>
-      <div className="workspace-grid">
-        <section className="workspace" aria-live="polite" aria-busy={busy}>
-          <div className="workspace-heading">
-            <div>
-              <span className="eyebrow">{state.surface ? "CURRENT VIEW" : "WORKSPACE"}</span>
-              <h2>{state.surface?.title ?? "Ask what needs attention"}</h2>
-              <p>Ask in your own words. This workspace stays the same; the contents change with the question.</p>
-            </div>
-            <span className="badge">{currentPersona?.title ?? "Demo user"}</span>
-          </div>
-          {busy ? (
-            <div className="progress-banner" role="status">
-              <span>Working on your question…</span>
-              <button className="ghost" type="button" onClick={() => void cancel()}>Cancel</button>
-            </div>
-          ) : null}
-          {signedOut ? <p className="muted">Sign in to use the workspace.</p> : state.surface ? (
-            <A2UIWorkspace
-              messages={state.surface.messages as A2UIMessage[]}
-              onAction={(action) => void invoke(action.name, action.context)}
-            />
-          ) : <p className="muted">No saved view yet. Try: What should I care about this morning?</p>}
-          {signedOut ? null : <form className="question-form" onSubmit={submit} id="question">
-            <span className="spark" aria-hidden="true">✦</span>
-            <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask anything about the company…" aria-label="Workspace question" />
-            <button type="submit" disabled={busy}>{busy ? "Working…" : "Ask"}</button>
-          </form>}
-        </section>
-        <aside className="activity-panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">PROGRESS</span><h2>Activity</h2></div>
-            <span className="live-pill"><span className={`status-dot ${busy || state.status === "running" ? "running" : ""}`} /> {statusLabel}</span>
-          </div>
-          <div className="timeline">
-            {(state.activity.length ? state.activity : [{ id: "seed", message: "Ask a question to get started", kind: "status", timestamp: new Date().toISOString() }]).map((item) => (
-              <div className="timeline-item" key={item.id}>
-                <span className="timeline-dot" />
-                <div><p>{item.message}</p><small>{activityKindLabel(item.kind)}</small></div>
+      {home ? null : (
+        <div className="stage">
+          <section className={working && surface ? "workspace updating" : "workspace"} aria-live="polite" aria-busy={busy}>
+            {pending ? (
+              <div className="pending" role="status">
+                <span className="eyebrow">{asked === BRIEFING ? "GOOD MORNING" : "WORKING ON"}</span>
+                <h2>{asked === BRIEFING ? "Preparing your briefing" : asked || "Your question"}</h2>
+                <p className="muted">{steps[steps.length - 1]?.message ?? "Starting…"}</p>
+                <div className="skeleton" aria-hidden="true"><span /><span /><span /></div>
               </div>
-            ))}
-          </div>
-          <div className="panel-footer">
-            <span className="eyebrow">PREVIOUS VIEWS</span>
-            {state.surfaceHistory.map((item) => (
-              <button key={`${item.surfaceId}-${item.revision}`} className="ghost history" type="button" onClick={() => void restore(item)}>
-                {item.title}
-              </button>
-            ))}
-            {!state.surfaceHistory.length ? <p className="muted">No previous views yet.</p> : null}
-            <details className="dev-details" open={developerOpen} onToggle={(event) => setDeveloperOpen(event.currentTarget.open)}>
-              <summary>Developer details</summary>
-              <p>Run {state.runId ?? "none"}</p>
-              <p>Investigation {state.investigationId ?? "none"}</p>
-              <p>Revision {state.surface?.revision ?? "—"}</p>
-              <p>Provider {state.execution?.provider ?? "unknown"} · {state.execution?.executionMode ?? "fixture"}</p>
-              <p>Cost {state.usage?.costStatus === "known" && state.usage.estimatedCostUsd !== null ? `$${state.usage.estimatedCostUsd}` : "unknown"}</p>
-              <p>Transport agent SSE (`/runtime/investigate`)</p>
-              {substitutions.length ? substitutions.map((item) => (
-                <p key={`${item.specialist}-${item.reason}`}>Substituted {item.specialist}: {item.reason}</p>
-              )) : <p>No specialist substitutions</p>}
-            </details>
-          </div>
-        </aside>
-      </div>
+            ) : surface ? (
+              <A2UIWorkspace
+                messages={surface.messages as A2UIMessage[]}
+                onAction={(action) => void invoke(action.name, action.context)}
+              />
+            ) : (
+              <div className="pending">
+                {asked && asked !== BRIEFING ? <h2>{asked}</h2> : null}
+                <p className="muted">{steps[steps.length - 1]?.message ?? "Nothing to show yet."}</p>
+              </div>
+            )}
+          </section>
+          <aside className="steps-panel" aria-label="Progress">
+            <div className="steps-heading">
+              <span className="eyebrow">STEPS</span>
+              <span className="muted">{statusLabel}</span>
+            </div>
+            <ol className="steps">
+              {steps.map((item, index) => {
+                const current = working && index === steps.length - 1;
+                const failed = /failed|could not|unavailable/i.test(item.message);
+                return (
+                  <li key={item.id} className={current ? "step current" : failed ? "step failed" : "step"}>
+                    <span className="step-mark" aria-hidden="true">{current ? "" : failed ? "!" : "✓"}</span>
+                    <div><p>{item.message}</p><small>{activityKindLabel(item.kind)}</small></div>
+                  </li>
+                );
+              })}
+              {!steps.length ? <li className="step"><span className="step-mark" aria-hidden="true" /><div><p className="muted">No steps yet.</p></div></li> : null}
+            </ol>
+            {working ? null : (
+              <details className="dev-details" open={developerOpen} onToggle={(event) => setDeveloperOpen(event.currentTarget.open)}>
+                <summary>Previous views and run details</summary>
+                {state.surfaceHistory.map((item) => (
+                  <button key={`${item.surfaceId}-${item.revision}`} className="ghost history" type="button" onClick={() => void restore(item)}>
+                    {item.title}
+                  </button>
+                ))}
+                <p>Run {state.runId ?? "none"}</p>
+                <p>Investigation {state.investigationId ?? "none"}</p>
+                <p>Revision {state.surface?.revision ?? "—"}</p>
+                <p>Provider {state.execution?.provider ?? "unknown"} · {state.execution?.executionMode ?? "fixture"}</p>
+                <p>Cost {state.usage?.costStatus === "known" && state.usage.estimatedCostUsd !== null ? `$${state.usage.estimatedCostUsd}` : "unknown"}</p>
+                {substitutions.length ? substitutions.map((item) => (
+                  <p key={`${item.specialist}-${item.reason}`}>Substituted {item.specialist}: {item.reason}</p>
+                )) : <p>No specialist substitutions</p>}
+              </details>
+            )}
+          </aside>
+        </div>
+      )}
       {evidence ? (
         <div className="drawer" role="dialog" aria-modal="true" aria-label="Supporting evidence">
           <div className="drawer-card">

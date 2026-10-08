@@ -1,6 +1,8 @@
 import { z } from "zod";
 
-export const A2UI_CATALOG_ID = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
+import { WORKSPACE_CATALOG_ID } from "./catalog.js";
+
+export const A2UI_CATALOG_ID = WORKSPACE_CATALOG_ID;
 
 export const A2UIMessageSchema = z.object({
   version: z.literal("v0.9"),
@@ -27,6 +29,8 @@ export const PresentationFindingSchema = z.object({
   title: z.string().min(1),
   body: z.string().min(1),
   kind: z.enum(["observation", "hypothesis", "unresolved_question"]),
+  /** Lets a briefing lead with what matters most. */
+  severity: z.enum(["info", "low", "medium", "high", "critical"]).optional(),
   evidenceIds: z.array(z.string().min(1))
 });
 

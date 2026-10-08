@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentFinding, Domain, InvestigationTask, TaskResult } from "@anc/contracts";
 import type { RuntimeStore } from "@anc/runtime-storage";
 import { CompanyMcpClient } from "../mcp-client.js";
-import { CAPABILITIES } from "../registry.js";
+import { CAPABILITIES, type CapabilityDefinition } from "../registry.js";
 import { BASELINE, CURRENT, RELEASE_WINDOW, TREND_WINDOW } from "../windows.js";
 import { validateFinding } from "../validation.js";
 
@@ -146,6 +146,79 @@ function entityIdFor(entityType: string, row: Record<string, unknown>, index: nu
   return String(row.id ?? row[`${entityType}Id`] ?? index);
 }
 
+/**
+ * Saves the table and series artifacts a tool result supports. Rows, totals and
+ * points are copied from the tool's own output, so the composed table or chart
+ * is the same whether a fixture or a model chose to make the call.
+ */
+export function saveCapabilityArtifacts(store: RuntimeStore, task: InvestigationTask, runId: string, def: CapabilityDefinition, evidence: Record<string, unknown>) {
+  const rows = rowsOf(evidence);
+  const result = evidence.result as Record<string, unknown> | undefined;
+  if (def.series) {
+    const points = (result?.points as Array<Record<string, unknown>> | undefined) ?? [];
+    const usable = points
+      .map((point) => ({ label: String(point.bucket ?? ""), value: Number(point[def.series!] ?? 0) }))
+      .filter((point) => point.label && Number.isFinite(point.value));
+    if (usable.length >= 2) {
+      store.saveArtifact({
+        id: `artifact-${task.taskId}-${def.tool}`,
+        threadId: "pending",
+        runId,
+        ownerId: "pending",
+        kind: "series",
+        payload: {
+          title: def.description,
+          unit: def.series === "errorRate" ? "ratio" : "count",
+          metric: def.series,
+          points: usable,
+        },
+        now: now(),
+      });
+    }
+  }
+  if (rows.length && def.rowEntity) {
+    const rowEntity = def.rowEntity;
+    const columns = Object.keys(rows[0] ?? {}).slice(0, 4);
+    // Deterministic totals come from the tool's own arithmetic, never from the
+    // model, so the comparison footer is reproducible from the same query.
+    const toolTotals = (result as { totals?: Record<string, unknown> } | undefined)?.totals;
+    const totals = toolTotals
+      ? [
+        `Total (${toolTotals.count ?? rows.length} records)`,
+        ...columns.slice(1).map((column) => (toolTotals[column] === undefined ? "" : displayCell(column, toolTotals[column]))),
+      ]
+      : undefined;
+    store.saveArtifact({
+      id: `artifact-${task.taskId}-${def.tool}`,
+      threadId: "pending",
+      runId,
+      ownerId: "pending",
+      kind: "table",
+      payload: {
+        title: def.description,
+        columns,
+        rows: rows.map((row, index) => ({
+          id: String(row.id ?? row.customerId ?? index),
+          cells: columns.map((column) => displayCell(column, row[column])),
+          // Numeric hints so the renderer sorts currency and counts by
+          // magnitude rather than lexically.
+          sortValues: columns.map((column) => {
+            const value = row[column];
+            const numeric = typeof value === "number" ? value : Number(value);
+            return Number.isFinite(numeric) ? numeric : Number.NaN;
+          }),
+          entityType: rowEntity,
+          entityId: entityIdFor(rowEntity, row, index),
+        })),
+        totals,
+        completeness: rows.length >= 25 ? "partial" : "complete",
+        rowAction: def.rowAction ? { name: def.rowAction.name, label: "Assign" } : undefined,
+      },
+      now: now(),
+    });
+  }
+}
+
 async function runCapabilities(client: CompanyMcpClient, store: RuntimeStore, task: InvestigationTask, runId: string, capabilityIds: string[]): Promise<AgentFinding[]> {  const findings: AgentFinding[] = [];
   for (const capabilityId of capabilityIds) {
     const def = CAPABILITIES.find((item) => item.id === capabilityId);
@@ -155,69 +228,7 @@ async function runCapabilities(client: CompanyMcpClient, store: RuntimeStore, ta
     const evidence = await client.call(def.tool, args, task.domain);
     const rows = rowsOf(evidence);
     const result = evidence.result as Record<string, unknown> | undefined;
-    if (def.series) {
-      const points = (result?.points as Array<Record<string, unknown>> | undefined) ?? [];
-      const usable = points
-        .map((point) => ({ label: String(point.bucket ?? ""), value: Number(point[def.series!] ?? 0) }))
-        .filter((point) => point.label && Number.isFinite(point.value));
-      if (usable.length >= 2) {
-        store.saveArtifact({
-          id: `artifact-${task.taskId}-${def.tool}`,
-          threadId: "pending",
-          runId,
-          ownerId: "pending",
-          kind: "series",
-          payload: {
-            title: def.description,
-            unit: def.series === "errorRate" ? "ratio" : "count",
-            metric: def.series,
-            points: usable,
-          },
-          now: now(),
-        });
-      }
-    }
-    if (rows.length && def.rowEntity) {
-      const rowEntity = def.rowEntity;
-      const columns = Object.keys(rows[0] ?? {}).slice(0, 4);
-      // Deterministic totals come from the tool's own arithmetic, never from the
-      // model, so the comparison footer is reproducible from the same query.
-      const toolTotals = (result as { totals?: Record<string, unknown> } | undefined)?.totals;
-      const totals = toolTotals
-        ? [
-          `Total (${toolTotals.count ?? rows.length} records)`,
-          ...columns.slice(1).map((column) => (toolTotals[column] === undefined ? "" : displayCell(column, toolTotals[column]))),
-        ]
-        : undefined;
-      store.saveArtifact({
-        id: `artifact-${task.taskId}-${def.tool}`,
-        threadId: "pending",
-        runId,
-        ownerId: "pending",
-        kind: "table",
-        payload: {
-          title: def.description,
-          columns,
-          rows: rows.map((row, index) => ({
-            id: String(row.id ?? row.customerId ?? index),
-            cells: columns.map((column) => displayCell(column, row[column])),
-            // Numeric hints so the renderer sorts currency and counts by
-            // magnitude rather than lexically.
-            sortValues: columns.map((column) => {
-              const value = row[column];
-              const numeric = typeof value === "number" ? value : Number(value);
-              return Number.isFinite(numeric) ? numeric : Number.NaN;
-            }),
-            entityType: rowEntity,
-            entityId: entityIdFor(rowEntity, row, index),
-          })),
-          totals,
-          completeness: rows.length >= 25 ? "partial" : "complete",
-          rowAction: def.rowAction ? { name: def.rowAction.name, label: "Assign" } : undefined,
-        },
-        now: now(),
-      });
-    }
+    saveCapabilityArtifacts(store, task, runId, def, evidence);
     const count = rows.length || Number((result as { totals?: { count?: number } } | undefined)?.totals?.count ?? 0);
     // A single-record tool (get_customer) has no row list, so fall back to the
     // task's entity scope. That keeps the finding grounded in the record that

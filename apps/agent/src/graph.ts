@@ -9,7 +9,8 @@ import { isBroadObjective, proposePlan, validatePlan } from "./planner.js";
 import { resolveExecutionMode } from "./provider.js";
 import { RuntimeStore } from "@anc/runtime-storage";
 import { validateA2UI } from "./a2ui-validate.js";
-import { composeA2UI } from "./composer.js";
+import { recordSubstitution } from "./execution.js";
+import { composeSurface } from "./ui-composer.js";
 import { runSpecialist, specialistLabel } from "./specialists/index.js";
 import { CURRENT } from "./windows.js";
 
@@ -287,7 +288,11 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
     || Object.values(state.results).some((result) => result.taskId.includes("finance") && result.status === "failed");
   const listed = ctx.store.listArtifacts(state.threadId, ctx.principal.id);
   const current = listed.filter((item) => item.runId === state.runId);
-  const artifacts = [...current, ...listed.filter((item) => item.runId !== state.runId)];
+  // Earlier runs' artifacts are only for re-presenting them (a table toggle, a
+  // form step). A run that did its own work is composed from that work alone,
+  // so an older table cannot title or pad a new answer.
+  const didWork = Object.keys(state.tasks).length > 0;
+  const artifacts = didWork ? current : [...current, ...listed.filter((item) => item.runId !== state.runId)];
   if (state.intent === "draft" && !artifacts.some((item) => item.kind === "draft")) {
     const draft = buildDraft(state, findings);
     if (draft) {
@@ -306,7 +311,18 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   const presentation = toPresentation(state.intent, state.objective, findings, failedFinance, failedDomains, artifacts, state.view, state.clarification);
   const surfaceId = `surface-${state.investigationId}`;
   const revision = (state.surfaceRevision ?? 0) + 1;
-  const composed = composeA2UI(surfaceId, presentation);
+  ctx.emit("UI Composer is designing the workspace", "status");
+  const composed = await composeSurface(surfaceId, presentation, {
+    objective: state.objective,
+    runId: state.runId,
+    mode: isBroadObjective(state.objective) ? "briefing" : "detail",
+    audience: `${ctx.principal.title}. Cares about: ${ctx.principal.preferences.priorities.join(", ")}.`,
+  });
+  if (composed.reason) {
+    // Not silent: a rejected model layout is reported and counted like any other substitution.
+    ctx.emit("UI Composer layout was rejected; showing the standard layout", "status");
+    recordSubstitution(state.runId, "ui-composer", composed.reason);
+  }
   const invalid = validateA2UI(composed.messages);
   if (invalid.length) {
     ctx.emit(`Composer output invalid; keeping last accepted surface. ${invalid[0]}`, "status");
@@ -445,6 +461,9 @@ export function toPresentation(
     if (metric.unit === "ratio") value = `${(metric.value * 100).toFixed(1)}%`;
     if (metric.unit === "percent") value = `${metric.value.toFixed(0)}%`;
     if (metric.unit === "minor_units") value = `$${(metric.value / 100 / 1_000_000).toFixed(1)}M`;
+    // A model names units loosely ("USD minor units", "cents"); never show raw minor units as a figure.
+    else if (/minor|cents/i.test(metric.unit)) value = `$${(metric.value / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+    else if (metric.unit === "count" || Number.isInteger(metric.value)) value = metric.value.toLocaleString("en-US");
     return [{
       id: `${finding.findingId}-${metric.name}`,
       label: metric.name.replaceAll("_", " "),
@@ -460,6 +479,7 @@ export function toPresentation(
     title: finding.title,
     body: finding.summary,
     kind: finding.kind,
+    severity: finding.severity,
     evidenceIds: finding.claims.flatMap((claim) => claim.evidenceIds),
   }));
 
@@ -519,7 +539,8 @@ export function toPresentation(
   const resolvedView = resolveView(view, { hasTable: rows.length > 0, hasChart: seriesPoints.length >= 2, hasDraft: Boolean(draftPayload), hasForm: intent === "prepare_assignment" || intent === "commit_assignment" });
   const quiet = !findings.some((finding) => finding.severity === "high" || finding.severity === "critical");
   const broad = isBroadObjective(objective);
-  const title = tablePayload?.title
+  // A summary spans several domains, so one table's name is not its title.
+  const title = (view === "summary" ? "" : tablePayload?.title)
     || (rows.length && !broad ? (presentationFindings[0]?.title ?? "Results") : "")
     || (release && !broad ? release.id : "")
     || (customers.length === 1 && !broad ? (customers[0]?.label ?? customers[0]?.id ?? "Account") : "")
@@ -571,7 +592,7 @@ export function toPresentation(
       financeFailed ? "Financial information is unavailable for this run." : "",
       broad ? "Root cause is not confirmed." : "",
       draftPayload ? "The draft below is model-authored. It is not an observed fact and nothing has been executed." : "",
-      objective ? `Question: ${objective}` : "",
+      objective && !broad ? `Question: ${objective}` : "",
     ].filter(Boolean),
   };
 }

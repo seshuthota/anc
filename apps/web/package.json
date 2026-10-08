@@ -10,14 +10,16 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@ag-ui/client": "^1.0.0",
     "@anc/contracts": "workspace:*",
     "@anc/policy": "workspace:*",
-    "@ag-ui/client": "^1.0.0",
+    "@copilotkit/a2ui-renderer": "1.73.0",
     "@copilotkit/react-core": "^1.73.0",
     "@copilotkit/runtime": "^1.73.0",
     "next": "^15.5.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

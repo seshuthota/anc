@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { A2UI_COMPONENT_TYPES } from "@anc/contracts/catalog";
+import { WORKSPACE_EXTENSION_COMPONENTS } from "@anc/contracts/catalog";
 import { composeA2UI } from "./composer.js";
 import { validateA2UI } from "./a2ui-validate.js";
 
@@ -24,7 +24,7 @@ describe("A2UI validation", () => {
       { version: "v0.9", createSurface: { surfaceId: "s", catalogId: "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json" } },
       { version: "v0.9", updateComponents: { surfaceId: "s", components: [
         { id: "root", component: "Column", children: ["missing"] },
-        { id: "btn", component: "Button", text: "x", action: { event: { name: "delete_company" } } },
+        { id: "btn", component: "Button", child: "missing", action: { event: { name: "delete_company" } } },
       ] } },
     ]);
     expect(errors.some((item) => item.includes("dangling"))).toBe(true);
@@ -48,9 +48,11 @@ describe("A2UI validation", () => {
    * The renderer is a client module, so this is a static source check.
    */
   it("renders every component type the validator accepts", () => {
-    const source = readFileSync(fileURLToPath(new URL("../../web/lib/a2ui.tsx", import.meta.url)), "utf8");
-    const unhandled = A2UI_COMPONENT_TYPES.filter((type) => !source.includes(`type === "${type}"`));
+    // Basic components are drawn by the standard renderer; extensions must be registered in the workspace catalog.
+    const source = readFileSync(fileURLToPath(new URL("../../web/lib/catalog.tsx", import.meta.url)), "utf8");
+    const unhandled = WORKSPACE_EXTENSION_COMPONENTS.filter((type) => !source.includes(`  ${type}: ({`));
     expect(unhandled).toEqual([]);
+    expect(source).toContain("includeBasicCatalog: true");
   });
 });
 
@@ -76,7 +78,7 @@ describe("view-driven composition", () => {
     expect(validateA2UI(messages)).toEqual([]);
     const components = messages.flatMap((message) => ("updateComponents" in message ? message.updateComponents?.components ?? [] : []));
     expect(components.some((component) => component.component === "Table")).toBe(true);
-    expect(components.some((component) => component.component === "Button" && component.text === "Acme")).toBe(false);
+    expect(components.some((component) => component.component === "Text" && component.text === "Acme")).toBe(false);
   });
 
   it("emits a chart for a trend view", () => {
@@ -114,9 +116,9 @@ describe("view-driven composition", () => {
     });
     expect(validateA2UI(messages)).toEqual([]);
     const components = messages.flatMap((message) => ("updateComponents" in message ? message.updateComponents?.components ?? [] : []));
-    expect(components.some((component) => component.component === "TextField")).toBe(true);
-    expect(components.some((component) => component.component === "Checkbox")).toBe(true);
-    const save = components.find((component) => component.component === "Button" && component.text === "Save draft");
+    expect(components.some((component) => component.component === "EditField")).toBe(true);
+    expect(components.some((component) => component.component === "SelectOption")).toBe(true);
+    const save = components.find((component) => component.id === "draft_save");
     expect((save?.action as { event?: { name?: string } })?.event?.name).toBe("save_draft");
   });
 

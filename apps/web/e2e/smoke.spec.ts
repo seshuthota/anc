@@ -7,21 +7,20 @@ test("labels the demo identity switcher", async ({ page }) => {
 
 test("cancels the first run before a workspace is accepted", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Ask what needs attention" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "DemoCo" })).toBeVisible();
   await page.getByLabel("Workspace question").fill("What should I care about this morning?");
   await page.getByRole("button", { name: "Ask" }).click();
   await expect(page.getByRole("button", { name: "Cancel" }).first()).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).first().click();
   await expect(page.locator("header").getByText("Stopped")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole("heading", { name: "Ask what needs attention" })).toBeVisible();
 });
 
 test("shows progress, completes an investigation, and restores it on refresh", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Workspace question").fill("What should I care about this morning?");
   await page.getByRole("button", { name: "Ask" }).click();
-  await expect(page.getByText("Working on your question")).toBeVisible();
-  const heading = page.locator(".workspace-heading h2");
+  await expect(page.getByRole("status")).toBeVisible();
+  const heading = page.locator(".a2ui-root h2");
   await expect(heading).toHaveText(/Morning overview|Unassigned|Results|Incomplete answer/, { timeout: 60_000 });
   const title = await heading.innerText();
   await page.reload();

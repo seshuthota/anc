@@ -29,19 +29,20 @@ export function validateA2UI(messages: A2UIMessage[]): string[] {
         const id = String(component.id ?? "");
         if (!id) errors.push("component missing id");
         const type = String(component.component ?? "");
-        // Must stay in step with the renderer in apps/web/lib/a2ui.tsx, which
-        // switches on this same shared list. Accepting a component the renderer
-        // cannot draw would replace the last good workspace with a blank one.
+        // Must stay in step with the catalog registered in apps/web/lib/catalog.tsx.
+        // Accepting a component the renderer cannot draw would replace the last
+        // good workspace with a blank one.
         if (!isA2UIComponentType(type)) errors.push(`unsupported component ${type}`);
+        if (components.has(id)) errors.push(`duplicate component id ${id}`);
         components.set(id, component);
-        const actionName = (component.action as { event?: { name?: string | { path?: string } } } | undefined)?.event?.name;
-        const bound = actionName && typeof actionName === "object" && typeof actionName.path === "string";
-        if (type === "Button" && typeof actionName === "string" && !KNOWN_ACTIONS.has(actionName)) {
-          errors.push(`unknown action ${actionName}`);
+        if (type === "Button") {
+          // The standard Button takes its label as a child component and an event name as a literal.
+          if (typeof component.child !== "string") errors.push(`Button ${id} needs a child component for its label`);
+          const actionName = (component.action as { event?: { name?: unknown } } | undefined)?.event?.name;
+          if (typeof actionName !== "string") errors.push(`Button ${id} needs an action event name`);
+          else if (!KNOWN_ACTIONS.has(actionName)) errors.push(`unknown action ${actionName}`);
         }
-        if (type === "Button" && actionName && typeof actionName !== "string" && !bound) {
-          errors.push("action name must be a known action or a data path");
-        }
+        if (type === "Text" && component.text === undefined) errors.push(`Text ${id} has no text`);
       }
     }
   }

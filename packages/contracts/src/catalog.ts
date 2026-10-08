@@ -1,34 +1,38 @@
 /**
- * Single source of truth for the component types the workspace adapter can render.
+ * Single source of truth for the component types a workspace surface may use.
  *
- * `apps/agent/src/a2ui-validate.ts` (server) and `apps/web/lib/a2ui.tsx` (client)
- * both read this list. The validator must never accept a component the renderer
- * cannot draw: a surface that validates but renders blank is worse than a
- * rejected surface, because it replaces the last known-good workspace.
+ * Surfaces are rendered by the standard A2UI v0.9 renderer
+ * (`@copilotkit/a2ui-renderer`). `BASIC_CATALOG_COMPONENTS` are the standard
+ * basic-catalog components the workspace uses. `WORKSPACE_EXTENSION_COMPONENTS`
+ * are registered on top of the basic catalog in `apps/web/lib/catalog.tsx`,
+ * because the basic catalog has no data table, chart, or selection that reports
+ * back to the agent.
  *
- * `BASIC_CATALOG` entries are primitives from the A2UI v0.9 basic catalog.
- * `ADAPTER_EXTENSION` entries are documented extensions implemented only by the
- * local workspace adapter (see docs/compatibility.md).
+ * The server validator and the UI Composer both read this list, so neither can
+ * accept or author a component the browser cannot draw.
  */
+export const WORKSPACE_CATALOG_ID = "https://democo.local/a2ui/catalogs/workspace/v1";
+
 export const BASIC_CATALOG_COMPONENTS = [
   "Button",
   "Card",
   "Column",
+  "Divider",
   "List",
   "Row",
   "Text",
 ] as const;
 
-export const ADAPTER_EXTENSION_COMPONENTS = [
+export const WORKSPACE_EXTENSION_COMPONENTS = [
   "Chart",
-  "Checkbox",
+  "EditField",
+  "SelectOption",
   "Table",
-  "TextField",
 ] as const;
 
 export const A2UI_COMPONENT_TYPES = [
   ...BASIC_CATALOG_COMPONENTS,
-  ...ADAPTER_EXTENSION_COMPONENTS,
+  ...WORKSPACE_EXTENSION_COMPONENTS,
 ] as const;
 
 export type A2UIComponentType = (typeof A2UI_COMPONENT_TYPES)[number];

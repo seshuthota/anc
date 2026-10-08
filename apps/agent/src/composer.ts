@@ -2,6 +2,14 @@ import { A2UI_CATALOG_ID, type A2UIMessage, type PresentationInput } from "@anc/
 
 type Component = Record<string, unknown>;
 
+/** A standard A2UI Button: the label is a child Text component, not a prop. */
+function button(id: string, label: string, variant: "primary" | "borderless", action: Record<string, unknown>): Component[] {
+  return [
+    { id, component: "Button", child: `${id}_label`, variant, action },
+    { id: `${id}_label`, component: "Text", text: label },
+  ];
+}
+
 /**
  * Composes a workspace surface from verified presentation input.
  *
@@ -27,7 +35,7 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       components.push({ id: `metric_${metric.id}_col`, component: "Column", children: [`metric_${metric.id}_label`, `metric_${metric.id}_value`, `metric_${metric.id}_detail`] });
       components.push({ id: `metric_${metric.id}_label`, component: "Text", text: { path: `/metrics/${metric.id}/label` }, variant: "caption" });
       components.push({ id: `metric_${metric.id}_value`, component: "Text", text: { path: `/metrics/${metric.id}/value` }, variant: "h3" });
-      components.push({ id: `metric_${metric.id}_detail`, component: "Button", text: { path: `/metrics/${metric.id}/detail` }, variant: "borderless", action: { event: { name: "show_evidence", context: { evidenceId: metric.evidenceId } } } });
+      components.push(...button(`metric_${metric.id}_detail`, "Source", "borderless", { event: { name: "show_evidence", context: { evidenceId: metric.evidenceId } } }));
     }
   }
 
@@ -40,7 +48,7 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       title: { path: "/chart/title" },
       unit: presentation.chart.unit,
       points: { path: "/chart/points" },
-      caption: presentation.chart.caption ? { path: "/chart/caption" } : undefined,
+      ...(presentation.chart.caption ? { caption: { path: "/chart/caption" } } : {}),
     });
   }
 
@@ -53,7 +61,7 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       components.push({ id: `finding_${item.id}_title`, component: "Text", text: { path: `/findings/${item.id}/title` } });
       components.push({ id: `finding_${item.id}_body`, component: "Text", text: { path: `/findings/${item.id}/body` } });
       components.push({ id: `finding_${item.id}_kind`, component: "Text", text: { path: `/findings/${item.id}/kindLabel` }, variant: "caption" });
-      components.push({ id: `finding_${item.id}_evidence`, component: "Button", text: "View evidence", variant: "borderless", action: { event: { name: "show_evidence", context: { evidenceIds: item.evidenceIds } } } });
+      components.push(...button(`finding_${item.id}_evidence`, "View evidence", "borderless", { event: { name: "show_evidence", context: { evidenceIds: item.evidenceIds } } }));
     }
   }
 
@@ -65,9 +73,9 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       component: "Table",
       columns: { path: "/table/columns" },
       rows: { path: "/table/rows" },
-      totals: totals ? { path: "/table/totals" } : undefined,
-      defaultSort: presentation.table.defaultSort,
-      completeness: presentation.table.completeness,
+      ...(totals ? { totals: { path: "/table/totals" } } : {}),
+      ...(presentation.table.defaultSort === undefined ? {} : { defaultSort: presentation.table.defaultSort }),
+      ...(presentation.table.completeness ? { completeness: presentation.table.completeness } : {}),
       rowActionLabel: view === "queue" ? "Work" : "Open",
     });
   }
@@ -81,13 +89,14 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
     presentation.draft.steps.forEach((step, index) => {
       components.push({
         id: `draft_text_${index}`,
-        component: "TextField",
+        component: "EditField",
+        fieldId: `draft_text_${step.id}`,
         label: { path: `/draft/steps/${index}/label` },
         value: { path: `/draft/steps/${index}/text` },
       });
       components.push({
         id: `draft_done_${index}`,
-        component: "Checkbox",
+        component: "SelectOption",
         groupId: draftId,
         optionId: step.id,
         text: { path: `/draft/steps/${index}/doneLabel` },
@@ -96,7 +105,7 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       });
     });
     components.push({ id: "draft_assumptions", component: "Text", text: { path: "/draft/assumptionsLabel" }, variant: "caption" });
-    components.push({ id: "draft_save", component: "Button", text: "Save draft", action: { event: { name: "save_draft", context: { draftId } } } });
+    components.push(...button("draft_save", "Save draft", "primary", { event: { name: "save_draft", context: { draftId } } }));
   }
 
   if (presentation.form) {
@@ -107,27 +116,16 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       formChildren.push(`field_${field.id}`);
       if (field.options?.length) {
         components.push({ id: `field_${field.id}`, component: "Column", children: [`field_${field.id}_label`, ...field.options.map((option) => `opt_${field.id}_${option.id}`)] });
-        components.push({ id: `field_${field.id}_label`, component: "Text", text: { path: `/form/fields/${field.id}/label` }, variant: "caption" });
+        components.push({ id: `field_${field.id}_label`, component: "Text", text: field.label, variant: "caption" });
         for (const option of field.options) {
-          components.push({
-            id: `opt_${field.id}_${option.id}`,
-            component: "Button",
-            text: { path: `/form/fields/${field.id}/options/${option.id}/label` },
-            variant: "borderless",
-            action: { event: { name: "select_assignee", context: { [field.name]: option.id, label: option.label, proposalId: { path: "/form/id" } } } },
-          });
+          components.push(...button(`opt_${field.id}_${option.id}`, option.label, "borderless", { event: { name: "select_assignee", context: { [field.name]: option.id, label: option.label, proposalId: presentation.form.id } } }));
         }
       } else {
-        components.push({ id: `field_${field.id}`, component: "Text", text: { path: `/form/fields/${field.id}/display` } });
+        components.push({ id: `field_${field.id}`, component: "Text", text: field.value ? `${field.label}: ${field.value}` : field.label });
       }
     }
     formChildren.push("form_submit");
-    components.push({
-      id: "form_submit",
-      component: "Button",
-      text: { path: "/form/submitLabel" },
-      action: { event: { name: { path: "/form/submitAction" }, context: { proposalId: { path: "/form/id" } } } },
-    });
+    components.push(...button("form_submit", presentation.form.submitLabel, "primary", { event: { name: presentation.form.submitAction, context: { proposalId: presentation.form.id } } }));
     components.push({ id: "form_block", component: "Column", children: formChildren });
   }
 
@@ -138,7 +136,7 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
     for (const option of presentation.selection.options) {
       components.push({
         id: `sel_${option.id}`,
-        component: "Checkbox",
+        component: "SelectOption",
         groupId: presentation.selection.id,
         optionId: option.id,
         text: { path: `/selection/options/${option.id}/label` },
@@ -157,13 +155,7 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
     rootChildren.push("actions");
     components.push({ id: "actions", component: "Row", children: presentation.actions.map((action) => `action_${action.id}`) });
     for (const action of presentation.actions) {
-      components.push({
-        id: `action_${action.id}`,
-        component: "Button",
-        text: action.label,
-        variant: "primary",
-        action: { event: { name: action.name, context: { entities: action.entities } } },
-      });
+      components.push(...button(`action_${action.id}`, action.label, "primary", { event: { name: action.name, context: { entities: action.entities } } }));
     }
   }
 

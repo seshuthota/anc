@@ -74,7 +74,11 @@ export class CompanyMcpClient {
     }
     const result = await this.client.callTool({ name: tool, arguments: args }) as McpResult;
     if (result.isError || !result.structuredContent || typeof result.structuredContent !== "object") {
-      throw new Error(`Company tool ${tool} failed`);
+      // Carry the tool's own message so a caller can correct its arguments.
+      const detail = Array.isArray(result.content)
+        ? result.content.map((item) => (item as { text?: unknown }).text).filter((text) => typeof text === "string").join(" ").slice(0, 400)
+        : "";
+      throw new Error(`Company tool ${tool} failed${detail ? `: ${detail}` : ""}`);
     }
     const evidence = result.structuredContent as Record<string, unknown>;
     if (this.store && this.ctx && typeof evidence.evidenceId === "string") {
@@ -90,6 +94,13 @@ export class CompanyMcpClient {
       });
     }
     return evidence;
+  }
+
+  /** The company server's own tool descriptions, keyed by tool name. */
+  async describeTools(): Promise<Record<string, string>> {
+    if (!this.client) throw new Error("MCP client is not connected");
+    const listed = await this.client.listTools();
+    return Object.fromEntries(listed.tools.map((tool) => [tool.name, tool.description ?? ""]));
   }
 
   async close(): Promise<void> {
