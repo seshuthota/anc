@@ -458,7 +458,9 @@ describe("briefing actions (P4)", () => {
     expect(await snapshot()).toEqual(before);
     const receipt = briefingOf(refused).primary!.receipts!.at(-1)!;
     expect(receipt.status).toBe("failed");
-    expect(receipt.text).toMatch(/Not done: the record changed after it was read/);
+    expect(receipt.text).toMatch(/Not done: the record changed after it was read \(someone else changed it first\)/);
+    // Person wording: no tool name, no raw error.
+    expect(receipt.text).not.toMatch(/Company tool|escalate_equipment_fault|stale/);
     expect(briefingOf(refused).actions.map((action) => action.id)).toContain("escalate_equipment_fault");
   }, 120_000);
 
@@ -533,6 +535,26 @@ describe("briefing actions (P4)", () => {
     // The next briefing reads the escalation and does not offer it again.
     const next = await runInvestigation({ question: BRIEF, threadId: "t-act-after-escalate", principal: coo });
     expect(briefingOf(next).actions.map((action) => action.id)).toEqual(["notify_shipper", "assign_complaints", "drill_primary"]);
+  }, 180_000);
+
+  it("a later success clears the old \"Not done: expired\" receipt for that action", async () => {
+    const { openLogisticsDatabase } = await import("@anc/logistics-db");
+    const writer = openLogisticsDatabase(process.env.LOGISTICS_DB_PATH!);
+    writer.prepare("UPDATE equipment_events SET escalated_to = NULL, escalated_at = NULL, version = version + 1 WHERE id = 'eq-hyd-0920'").run();
+    writer.close();
+    const thread = "t-act-expired-then-done";
+    await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const first = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    const lapsed = briefingOf(first).pending!.proposalId;
+    store.saveProposal({ ...store.getProposal(lapsed, coo.id)!, ownerId: coo.id, expiresAt: "2026-09-21T01:00:00.000Z", now: new Date().toISOString() });
+    const expired = await act(thread, coo, "confirm_action", { parameters: { proposalId: lapsed } });
+    expect(briefingOf(expired).primary!.receipts!.map((item) => item.status)).toEqual(["failed"]);
+    const again = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    const done = await act(thread, coo, "confirm_action", { parameters: { proposalId: briefingOf(again).pending!.proposalId } });
+    const receipts = briefingOf(done).primary!.receipts!;
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ status: "succeeded", actionId: "escalate_equipment_fault" });
+    expect(receipts.some((item) => /expired/.test(item.text))).toBe(false);
   }, 180_000);
 
   it("a write that succeeded but cannot be re-read still gets a succeeded receipt and stays committed (Reviewer M1)", async () => {

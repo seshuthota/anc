@@ -10,6 +10,7 @@ import { catalogAction, type CatalogAction, type CatalogActionId } from "./actio
 import { DEMO_CLOCK } from "@anc/logistics-db/constants";
 import { istClock } from "./windows.js";
 import type { AgentFinding } from "@anc/contracts";
+import { personReason, plural } from "./wording.js";
 
 /*
  * Operations: every change to a company record goes through prepareOperation (a
@@ -398,11 +399,13 @@ async function prepareBriefingAction(store: RuntimeStore, principal: Principal, 
   if (!assignees.length) return { payload: { actionId: action.id }, text: "Nobody in customer care can take these complaints.", confirmLabel: "Back", blocked: true, resource };
   // Shared in turn across the care team, in the order the company lists them.
   const plan = complaints.map((row, index) => ({ complaintId: String(row.id), expectedVersion: Number(row.version ?? 1), assigneeId: assignees[index % assignees.length]!.id }));
-  const names = assignees.map((item) => item.label);
+  const used = assignees.slice(0, plan.length);
+  const names = used.map((item) => item.label);
+  const n = plan.length;
   return {
-    payload: { actionId: action.id, plan, assignees, args },
-    text: `Assign ${plan.length} open late complaints about today's at-risk parcels to ${names.join(", ")}, in turn? This changes ${plan.length} complaint records. It is not undone automatically.`,
-    confirmLabel: `Assign ${plan.length} complaints`,
+    payload: { actionId: action.id, plan, assignees: used, args },
+    text: `Assign ${plural(n, "open late complaint")} about today's at-risk parcels to ${names.join(", ")}${used.length > 1 ? ", in turn" : ""}? This changes ${plural(n, "complaint record")}. It is not undone automatically.`,
+    confirmLabel: `Assign ${plural(n, "complaint")}`,
     resource,
   };
 }
@@ -554,13 +557,14 @@ export async function confirmBriefingAction(input: { store: RuntimeStore; princi
       const message = error instanceof Error ? error.message : "operation failed";
       if (/Not authorized/.test(message)) throw error;
       const stale = /stale|already/i.test(message);
+      const reason = personReason(message);
       receipt = {
         operationId: store.getOperationByKey(writeFor(action.id, payload, principal).idempotencyKey, principal.id)?.id ?? "not-recorded",
         actionId: action.id,
         status: "failed",
         text: stale
-          ? `Not done: the record changed after it was read (${message}). Nothing was written; propose it again to see the current state.`
-          : `Could not confirm this was done: ${message}. Check the record before trying again.`,
+          ? `Not done: the record changed after it was read (${reason}). Nothing was written; propose it again to see the current state.`
+          : `Could not confirm this was done: ${reason}. Check the record before trying again.`,
         evidenceIds: [],
       };
       if (!stale) setProposalStatus(store, principal, open, "failed");
@@ -592,7 +596,9 @@ function closeConfirm(store: RuntimeStore, threadId: string, principal: Principa
   const { pending, ...rest } = active.briefing;
   // Only this proposal's confirm is closed; a newer one on the card stays.
   const keep = pending && pending.proposalId !== proposalId ? { pending } : {};
-  const primary = rest.primary ? { ...rest.primary, receipts: [...(rest.primary.receipts ?? []), receipt].slice(-3) } : rest.primary;
+  // Once the action is done, an older "not done" receipt for it (expired, refused) is no longer true.
+  const earlier = (rest.primary?.receipts ?? []).filter((item) => !(done && item.actionId === actionId && item.status === "failed"));
+  const primary = rest.primary ? { ...rest.primary, receipts: [...earlier, receipt].slice(-3) } : rest.primary;
   saveBriefing(store, threadId, principal.id, active, {
     ...rest,
     ...keep,
@@ -667,6 +673,7 @@ function receiptText(id: CatalogActionId, payload: Record<string, unknown>, outc
   const result = (outcome.already ? (outcome.previous.result as { done?: string[]; refused?: unknown[] } | undefined) : outcome.result as { done?: string[]; refused?: unknown[] }) ?? {};
   const remaining = Number((reread.result as { total?: number } | undefined)?.total ?? 0);
   const names = ((payload.assignees ?? []) as Array<{ label: string }>).map((item) => item.label).join(", ");
-  const refused = result.refused?.length ? ` · ${result.refused.length} changed meanwhile and were left alone` : "";
-  return `Assigned ${result.done?.length ?? 0} late complaints to ${names}${refused} · ${remaining} still without an owner · ${ref}`;
+  const left = result.refused?.length ?? 0;
+  const refused = left ? ` · ${left} changed meanwhile and ${left === 1 ? "was" : "were"} left alone` : "";
+  return `Assigned ${plural(result.done?.length ?? 0, "late complaint")} to ${names}${refused} · ${remaining} still without an owner · ${ref}`;
 }
