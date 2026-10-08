@@ -221,5 +221,39 @@ describe("agent HTTP", () => {
       expect(db.prepare("SELECT escalated_to FROM equipment_events WHERE id = 'eq-hyd-0920'").get()).toEqual({ escalated_to: null });
       db.close();
     }, 60_000);
+
+    it("answers an expired confirm with 200 and a \"Not done: expired\" receipt, and writes nothing", async () => {
+      type Briefing = { pending?: { proposalId: string }; primary: { receipts?: Array<{ status: string; text: string; actionId: string; operationId: string }> } };
+      type Surface = { surfaceId: string; revision: number; dataModel: { briefing: Briefing } };
+      const post = (surface: Surface, body: Record<string, unknown>) => fetch(`${base}/runtime/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...as("user-coo") },
+        body: JSON.stringify({ actionId: `act-${Date.now()}-${Math.random()}`, surfaceId: surface.surfaceId, surfaceRevision: surface.revision, ...body }),
+      });
+      const current = (await (await fetch(`${base}/runtime/state`, { headers: as("user-coo") })).json() as { surface: Surface }).surface;
+      const proposed = await post(current, { name: "propose_action", parameters: { actionId: "escalate_equipment_fault" } });
+      expect(proposed.status).toBe(200);
+      const surface = (await proposed.json() as { surface: Surface }).surface;
+      const proposalId = surface.dataModel.briefing.pending!.proposalId;
+
+      // Let the confirmation lapse: move its expiry into the past.
+      const proposal = store.getProposal(proposalId, "user-coo")!;
+      store.saveProposal({ ...proposal, ownerId: "user-coo", expiresAt: new Date(Date.now() - 60_000).toISOString(), now: new Date().toISOString() });
+
+      const confirmed = await post(surface, { name: "confirm_action", parameters: { proposalId } });
+      expect(confirmed.status).toBe(200);
+      const after = (await confirmed.json() as { surface: Surface }).surface;
+      expect(after.dataModel.briefing.pending).toBeUndefined();
+      const receipt = after.dataModel.briefing.primary.receipts?.at(-1);
+      expect(receipt).toMatchObject({ status: "failed", actionId: "escalate_equipment_fault", operationId: "not-recorded" });
+      expect(receipt!.text).toMatch(/^Not done: this confirmation expired/);
+      expect(receipt!.text).toContain("Nothing was written");
+      expect(store.getProposal(proposalId, "user-coo")!.status).toBe("expired");
+
+      const { openLogisticsDatabase } = await import("@anc/logistics-db");
+      const db = openLogisticsDatabase(process.env.LOGISTICS_DB_PATH!, true);
+      expect(db.prepare("SELECT escalated_to FROM equipment_events WHERE id = 'eq-hyd-0920'").get()).toEqual({ escalated_to: null });
+      db.close();
+    }, 60_000);
   });
 });
