@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // No floating dev-tools badge over the workspace in dev and e2e screenshots.
+  devIndicators: false,
   outputFileTracingRoot: join(__dirname, "../.."),
   allowedDevOrigins: ["127.0.0.1"],
   transpilePackages: ["@anc/policy"],

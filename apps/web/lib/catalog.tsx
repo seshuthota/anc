@@ -326,6 +326,11 @@ export const workspaceCatalog = createCatalog(workspaceDefinitions, {
     const evidenceCount = finding.evidenceIds?.length ?? 0;
     return (
       <section className="ws-primary" data-a2ui="PrimaryFinding" aria-label="Primary finding">
+        <div className="ws-primary-meta">
+          {/* Severity is one accent and a small pill, never a red tile. */}
+          <span className="ws-pill ws-pill-attention"><span className="ws-pill-dot" aria-hidden="true" />Needs attention</span>
+          <span className="ws-primary-kicker">Top of your briefing</span>
+        </div>
         <h2 className="ws-h2 ws-primary-headline">{finding.headline ?? ""}</h2>
         {metric ? (
           <div className="ws-primary-figure">
@@ -359,8 +364,8 @@ export const workspaceCatalog = createCatalog(workspaceDefinitions, {
           <ul className="ws-primary-receipts" aria-label="Done from this briefing">
             {finding.receipts.map((receipt) => (
               <li key={receipt.operationId + receipt.text} className={`ws-receipt ws-receipt-${receipt.status}`} data-testid="action-receipt" data-action-id={receipt.actionId}>
-                <span aria-hidden="true">{receipt.status === "succeeded" ? "✓" : "!"}</span>
-                <span>{receipt.text}</span>
+                <span className="ws-receipt-icon" aria-hidden="true">{receipt.status === "succeeded" ? "✓" : "!"}</span>
+                <span className="ws-receipt-text">{receipt.text}</span>
                 {receipt.evidenceIds?.length ? (
                   <button type="button" className="ws-button ws-button-borderless" onClick={() => evidence(receipt.evidenceIds)}>Record</button>
                 ) : null}
@@ -383,20 +388,23 @@ export const workspaceCatalog = createCatalog(workspaceDefinitions, {
     const context = (props.context && typeof props.context === "object" ? props.context : {}) as { label?: string; surfaceId?: string; revision?: number };
     return (
       <nav className="ws-context" data-a2ui="ContextHeader" aria-label="Where this came from">
-        <span className="ws-context-label">From your briefing: <strong>{context.label ?? ""}</strong></span>
         <button
           type="button"
-          className="ws-button ws-button-borderless ws-context-back"
+          className="ws-context-back"
           onClick={() => dispatch?.({ event: { name: "back_to_briefing", context: { surfaceId: context.surfaceId, revision: context.revision } } })}
         >
-          ▸ Back
+          <span aria-hidden="true">←</span> Back
         </button>
+        <span className="ws-context-label"><span className="ws-context-from">From your briefing</span><span className="ws-context-sep" aria-hidden="true">/</span><strong>{context.label ?? ""}</strong></span>
       </nav>
     );
   },
   Collapsible: ({ props, children }) => (
     <details className="ws-collapsible" data-a2ui="Collapsible">
-      <summary>{typeof props.summary === "string" ? props.summary : ""}</summary>
+      <summary>
+        <svg className="ws-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        <span>{typeof props.summary === "string" ? props.summary : ""}</span>
+      </summary>
       <div className="ws-collapsible-body">{props.child ? (children as Build)(props.child) : null}</div>
     </details>
   ),

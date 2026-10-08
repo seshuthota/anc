@@ -36,9 +36,14 @@ export function EvidenceDrawer({ state, onClose }: { state: EvidenceDrawerState;
   const item = state.items[active] ?? state.items[0];
   return (
     <div className="drawer" role="dialog" aria-modal="true" aria-label="Supporting evidence">
+      <div className="drawer-scrim" aria-hidden="true" onClick={onClose} />
       <div className="drawer-card" data-testid="evidence-drawer">
-        <div className="workspace-heading">
-          <div><h2>Where this came from</h2><p className="muted">{state.items.length === 1 ? "1 record" : `${state.items.length} records`} from company tools</p></div>
+        <div className="drawer-heading">
+          <div>
+            <span className="drawer-kicker">Evidence</span>
+            <h2>Where this came from</h2>
+            <p className="muted">{state.items.length === 1 ? "1 record" : `${state.items.length} records`} from company tools · read-only</p>
+          </div>
           <button className="ghost" type="button" autoFocus onClick={onClose}>Close</button>
         </div>
         {state.items.length > 1 ? (

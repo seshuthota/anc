@@ -11,31 +11,30 @@ const revision = async (page: Page) => {
   return ((await response.json()) as { surface: { revision: number } }).surface.revision;
 };
 
-test("the trace is folded into one summary line, findings only, ending in Workspace ready", async ({ page }) => {
+test("the activity is one pill; its popover lists findings only, ending in Workspace ready", async ({ page }) => {
   await page.goto("/");
   await expect(primary(page)).toHaveCount(1, { timeout: 90_000 });
-  const trace = page.getByTestId("trace");
-  await expect(trace).not.toHaveAttribute("open", "");
-  await expect(trace.locator("summary")).toHaveText(/^How this was worked out · 4 agents · \d+ lookups$/, { timeout: 30_000 });
-  // Single column: the trace sits under the answer, not beside it.
-  const stage = await page.locator(".stage").boundingBox();
-  const workspace = await page.getByTestId("workspace").boundingBox();
-  const traceBox = await trace.boundingBox();
-  expect(traceBox!.y).toBeGreaterThan(workspace!.y + workspace!.height - 1);
-  expect(Math.abs(traceBox!.x - workspace!.x)).toBeLessThan(2);
-  expect(stage).not.toBeNull();
+  const pill = page.getByTestId("activity-pill");
+  await expect(pill).toHaveText(/^4 agents · \d+ lookups · \d+\.\ds▸?$/, { timeout: 30_000 });
+  await expect(pill).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("activity-popover")).toHaveCount(0);
+  // The old trace and rail are gone.
+  await expect(page.getByTestId("trace")).toHaveCount(0);
   // Developer details only with ?dev=1.
   await expect(page.locator(".dev-details")).toHaveCount(0);
-  await mkdir(outDir, { recursive: true });
-  await page.screenshot({ path: resolve(outDir, "p5-collapsed-trace.png"), fullPage: true });
 
-  await trace.locator("summary").click();
-  const items = trace.locator("li");
-  await expect(items.last()).toHaveText("Workspace ready");
-  const text = await trace.innerText();
+  await pill.click();
+  const popover = page.getByTestId("activity-popover");
+  await expect(popover).toBeVisible();
+  await expect(popover.locator("li").last()).toHaveText("Workspace ready");
+  const text = await popover.innerText();
   expect(text).not.toMatch(/\bStarted\b|\bCompleted\b|\bcompleted\b/);
   expect(text).not.toMatch(/218/);
   expect(text).toMatch(/\d+ findings?/);
+  await mkdir(outDir, { recursive: true });
+  await page.screenshot({ path: resolve(outDir, "p5-activity-popover.png") });
+  await page.keyboard.press("Escape");
+  await expect(popover).toHaveCount(0);
 
   await page.goto("/?dev=1");
   await expect(page.locator(".dev-details")).toHaveCount(1, { timeout: 30_000 });
@@ -44,7 +43,7 @@ test("the trace is folded into one summary line, findings only, ending in Worksp
 test("briefing → Look into this → body replaced under a context header; a typed drill stays; Back restores revision N", async ({ page }) => {
   await page.goto("/");
   await expect(primary(page)).toHaveCount(1, { timeout: 90_000 });
-  await expect(page.getByTestId("trace").locator("summary")).toHaveText(/lookups$/, { timeout: 30_000 });
+  await expect(page.getByTestId("activity-pill")).toHaveText(/lookups/, { timeout: 30_000 });
   const n = await revision(page);
 
   // "Look into this" on the primary, or on a lower-priority item when the primary's
@@ -58,7 +57,7 @@ test("briefing → Look into this → body replaced under a context header; a ty
 
   await expect(header(page)).toHaveCount(1, { timeout: 60_000 });
   await expect(primary(page)).toHaveCount(0);
-  await expect(header(page)).toContainText("From your briefing:");
+  await expect(header(page)).toContainText("From your briefing");
   await expect(page.locator(".workspace.updating")).toHaveCount(0);
   expect(await anchors(page)).toBe(1);
   expect(await revision(page)).toBe(n + 1);
@@ -72,7 +71,7 @@ test("briefing → Look into this → body replaced under a context header; a ty
   expect(await revision(page)).toBe(n + 2);
 
   // Back restores exactly the briefing revision the drill came from.
-  await header(page).getByRole("button", { name: "▸ Back" }).click();
+  await header(page).getByRole("button", { name: "Back", exact: true }).click();
   await expect(primary(page)).toHaveCount(1, { timeout: 30_000 });
   await expect(header(page)).toHaveCount(0);
   expect(await anchors(page)).toBe(1);

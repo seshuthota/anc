@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { A2UIWorkspace, type A2UIMessage } from "../lib/a2ui";
 import { EvidenceDrawer, type EvidenceDrawerState, type EvidenceExplanation, type EvidenceItem } from "../lib/EvidenceDrawer";
+import { ActivityPill } from "../lib/ActivityPill";
 import {
   activityKindLabel,
   agentUrl,
@@ -21,70 +22,6 @@ const RUN_START = "Looking into your question";
 /** Asked on the person's behalf when they open the workspace, so they start from what needs attention. */
 const BRIEFING = "Brief me: what needs my attention this morning?";
 const briefedKey = (id: string) => `democo-briefed:${id}`;
-
-/** Who did a step, read from how the runtime words its activity. Each has its own colour in the rail. */
-const ACTORS: Array<[pattern: RegExp, key: string, name: string]> = [
-  [/^Network Agent\s+/, "network", "Network"],
-  [/^Shipments Agent\s+/, "shipments", "Shipments"],
-  [/^Last-Mile Agent\s+/, "lastmile", "Last mile"],
-  [/^Customers Agent\s+/, "customers", "Customers"],
-  [/^Lead Analyst\s+/, "analyst", "Lead analyst"],
-  [/^UI Composer\s+/, "composer", "UI composer"],
-];
-
-type Step = PublicState["activity"][number];
-
-/**
- * The quiet trace (R5): what each specialist found, not how it ran. Started and
- * finished lines and the per-finding lines (which carry figures that belong to
- * the evidence drawer) are folded into one line per specialist; the run ends with
- * "Workspace ready". The full step list is kept for ?dev=1.
- */
-function traceOf(steps: Step[]): { items: Array<{ id: string; actor: string; name: string; text: string; failed: boolean }>; agents: number; lookups: number | null } {
-  const found = new Map<string, number>();
-  for (const step of steps) {
-    if (step.kind !== "finding_discovered") continue;
-    const { actor } = describeStep(step.message);
-    found.set(actor, (found.get(actor) ?? 0) + 1);
-  }
-  let lookups: number | null = null;
-  const agents = new Set<string>();
-  const items: Array<{ id: string; actor: string; name: string; text: string; failed: boolean }> = [];
-  for (const step of steps) {
-    const described = describeStep(step.message);
-    const failed = /failed|could not|unavailable|rejected/i.test(step.message);
-    if (step.kind === "agent_started") { agents.add(described.actor); continue; }
-    if (step.kind === "task_delegated" || step.kind === "tool_queried") continue;
-    if (step.kind === "finding_discovered") {
-      if (described.actor === "analyst") items.push({ id: step.id, actor: "analyst", name: described.name, text: "Connected the findings", failed: false });
-      continue;
-    }
-    if (step.kind === "agent_completed") {
-      const count = found.get(described.actor) ?? 0;
-      items.push({ id: step.id, actor: described.actor, name: described.name, text: count ? `${count} finding${count === 1 ? "" : "s"}` : "Nothing to report", failed: false });
-      continue;
-    }
-    if (step.kind === "investigation_completed") {
-      const counted = step.message.match(/(\d+) lookups?/);
-      if (counted) lookups = Number(counted[1]);
-      items.push({ id: step.id, actor: "system", name: "", text: "Workspace ready", failed: false });
-      continue;
-    }
-    if (/^UI Composer is designing/.test(step.message)) continue;
-    items.push({ id: step.id, actor: described.actor, name: described.name, text: described.text, failed });
-  }
-  return { items, agents: agents.size, lookups };
-}
-
-function describeStep(message: string): { actor: string; name: string; text: string } {
-  for (const [pattern, actor, name] of ACTORS) {
-    if (pattern.test(message)) {
-      const rest = message.replace(pattern, "").replace(/^finding:\s*/, "").replace(/^connected the findings:\s*/, "");
-      return { actor, name, text: rest.charAt(0).toUpperCase() + rest.slice(1) };
-    }
-  }
-  return { actor: "system", name: "", text: message };
-}
 
 export default function HomePage() {
   const [state, setState] = useState<PublicState>(emptyState);
@@ -212,15 +149,6 @@ export default function HomePage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [evidence]);
-
-  const statusLabel = useMemo(() => {
-    if (busy || state.status === "running") return "Working";
-    if (state.status === "failed") return "Could not finish";
-    if (state.status === "cancelled") return "Stopped";
-    if (state.status === "partial") return "Partial answer";
-    if (state.surface) return "Ready";
-    return "Waiting";
-  }, [busy, state.status, state.surface]);
 
   async function ask(text: string, threadId = state.threadId, id = principalId, earlier = activityRef.current) {
     const trimmed = text.trim();
@@ -386,12 +314,7 @@ export default function HomePage() {
   // replaced in place when it arrives (R5).
   const surface = state.surface;
   const pending = working && !surface;
-  const trace = useMemo(() => traceOf(steps), [steps]);
-  const traceSummary = [
-    "How this was worked out",
-    trace.agents ? `${trace.agents} agent${trace.agents === 1 ? "" : "s"}` : "",
-    trace.lookups !== null ? `${trace.lookups} lookup${trace.lookups === 1 ? "" : "s"}` : working ? "working…" : "",
-  ].filter(Boolean).join(" · ");
+
   const identity = authMode === "oidc" ? (
     signedOut
       ? <a className="ghost" href="/api/auth/login">Sign in</a>
@@ -407,40 +330,35 @@ export default function HomePage() {
   return (
     <main className={home ? "app-shell home" : "app-shell"}>
       <header className="masthead">
-        {home
-          ? <h1 className="wordmark"><span className="wordmark-mark" aria-hidden="true" />DemoCo <span className="wordmark-sub">Parcel Network</span></h1>
-          : <button className="wordmark" type="button" onClick={() => void ask(BRIEFING)} aria-label="DemoCo: refresh briefing" title="Refresh the morning briefing"><span className="wordmark-mark" aria-hidden="true" />DemoCo</button>}
-        {signedOut ? <p className="muted">Sign in to use the workspace.</p> : (
-          <form className="question-form" onSubmit={submit} id="question">
-            <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about hubs, parcels, lockers, shippers or complaints" aria-label="Workspace question" autoFocus />
-            <button type="submit" disabled={busy || !question.trim()}>Ask</button>
-          </form>
-        )}
-        <div className="connection">
-          {home ? null : (
-            <>
-              <span className={`status-dot ${working ? "running" : state.status === "failed" ? "failed" : ""}`} aria-hidden="true" />
-              <span aria-live="polite">{statusLabel}</span>
-              <span className="clock">Mon 21 Sep, 07:00 IST</span>
-              {busy ? <button className="ghost" type="button" onClick={() => void cancel()}>Cancel</button> : null}
-            </>
+        <div className="masthead-inner">
+          {home
+            ? <h1 className="wordmark"><span className="wordmark-mark" aria-hidden="true" />DemoCo <span className="wordmark-sub">Parcel Network</span></h1>
+            : <button className="wordmark" type="button" onClick={() => void ask(BRIEFING)} aria-label="DemoCo: refresh briefing" title="Refresh the morning briefing"><span className="wordmark-mark" aria-hidden="true" />DemoCo</button>}
+          {signedOut ? <p className="muted">Sign in to use the workspace.</p> : (
+            <form className="question-form" onSubmit={submit} id="question">
+              <svg className="question-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+              <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about hubs, parcels, lockers, shippers or complaints" aria-label="Workspace question" autoFocus />
+              <button type="submit" disabled={busy || !question.trim()}>Ask</button>
+            </form>
           )}
-          {identity}
+          <div className="connection">
+            {home ? null : (
+              <>
+                <ActivityPill steps={steps} working={working} status={state.status} />
+                {busy ? <button className="ghost" type="button" onClick={() => void cancel()}>Cancel</button> : null}
+                <span className="clock" title="The network's fixed demo clock">Mon 21 Sep · 07:00 IST</span>
+              </>
+            )}
+            {identity}
+          </div>
         </div>
       </header>
       {home ? null : (
-        <div className="stage">
-          {working && surface ? (
-            <p className="working-note" role="status">
-              <span className="status-dot running" aria-hidden="true" />
-              {asked === BRIEFING ? "Preparing your morning briefing" : asked ? `Looking into: ${asked}` : "Working on it"}
-            </p>
-          ) : null}
+        <div className="stage" data-testid="stage">
           <section className={working && surface ? "workspace updating" : "workspace"} aria-live="polite" aria-busy={busy} data-testid="workspace">
             {pending ? (
               <div className="pending" role="status">
                 <h2>{asked === BRIEFING ? "Preparing your morning briefing" : asked || "Working on it"}</h2>
-                <p className="muted">{trace.items[trace.items.length - 1]?.text ?? "Starting…"}</p>
                 <div className="skeleton" aria-hidden="true"><span /><span /><span /></div>
               </div>
             ) : surface ? (
@@ -451,28 +369,10 @@ export default function HomePage() {
             ) : (
               <div className="pending">
                 {asked && asked !== BRIEFING ? <h2>{asked}</h2> : null}
-                <p className="muted">{trace.items[trace.items.length - 1]?.text ?? "Nothing to show yet."}</p>
+                <p className="muted">{state.status === "failed" ? "This request could not be completed." : state.status === "cancelled" ? "Stopped." : "Nothing to show yet."}</p>
               </div>
             )}
           </section>
-          <details className="trace" data-testid="trace" aria-label="How this was worked out">
-            <summary>{traceSummary}</summary>
-            <ol className="steps">
-              {trace.items.map((item, index) => {
-                const current = working && index === trace.items.length - 1;
-                return (
-                  <li key={item.id} className={`step actor-${item.actor}${current ? " current" : ""}${item.failed ? " failed" : ""}`}>
-                    <span className="step-mark" aria-hidden="true" />
-                    <div>
-                      {item.name ? <span className="step-actor">{item.name}</span> : null}
-                      <p>{item.text}</p>
-                    </div>
-                  </li>
-                );
-              })}
-              {!trace.items.length ? <li className="step actor-system"><span className="step-mark" aria-hidden="true" /><div><p>Nothing has been asked yet.</p></div></li> : null}
-            </ol>
-          </details>
           {developer && !working ? (
             <details className="dev-details" open>
               <summary>Developer: every step, previous views and run details</summary>
