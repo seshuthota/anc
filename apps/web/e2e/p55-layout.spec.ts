@@ -166,3 +166,25 @@ test("cause-chain arrows stay with their hop when the row wraps, and at 390px", 
     await primary.screenshot({ path: resolve(outDir, name) });
   }
 });
+
+/* The desktop activity popover is solid: no card text shows through it. */
+test("desktop activity popover is opaque", async ({ page }) => {
+  const outDir = resolve(__dirname, "../../../test-results");
+  await mkdir(outDir, { recursive: true });
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.goto("/");
+  await expect(page.locator('[data-a2ui="PrimaryFinding"]')).toHaveCount(1, { timeout: 90_000 });
+  await expect(page.getByTestId("activity-pill")).toHaveText(/lookups?\b/, { timeout: 60_000 });
+  await page.getByTestId("activity-pill").click();
+  const popover = page.getByTestId("activity-popover");
+  await expect(popover).toBeVisible();
+  await page.waitForTimeout(400); // past the pop-in animation
+  const look = await popover.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { background: style.backgroundColor, backdrop: style.backdropFilter, opacity: style.opacity };
+  });
+  expect(look.background).toBe("rgb(18, 18, 22)");
+  expect(look.backdrop).toBe("none");
+  expect(look.opacity).toBe("1");
+  await page.screenshot({ path: resolve(outDir, "p8-desktop-popover.png") });
+});
