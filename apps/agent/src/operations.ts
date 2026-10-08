@@ -8,6 +8,7 @@ import { validateA2UI } from "./a2ui-validate.js";
 import type { RuntimeStore } from "@anc/runtime-storage";
 import { catalogAction, type CatalogAction, type CatalogActionId } from "./action-catalog.js";
 import { DEMO_CLOCK } from "@anc/logistics-db/constants";
+import { istClock } from "./windows.js";
 import type { AgentFinding } from "@anc/contracts";
 
 /*
@@ -142,7 +143,8 @@ async function readOnly<T>(store: RuntimeStore, principal: Principal, runId: str
 }
 
 const rowsOf = (evidence: Record<string, unknown>) => ((evidence.result as { rows?: Array<Record<string, unknown>> } | undefined)?.rows ?? []);
-const clock = (iso: unknown) => (typeof iso === "string" && /T\d{2}:\d{2}/.test(iso) ? `${iso.slice(11, 16)} IST` : "");
+// Formatted in Asia/Kolkata whatever offset the timestamp carries (an expiry is written in UTC).
+const clock = istClock;
 const shortId = (operationId: string) => operationId.slice(0, 11);
 
 // ---------------------------------------------------------------------------

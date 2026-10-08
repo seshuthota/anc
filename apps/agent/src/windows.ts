@@ -11,4 +11,15 @@ const now = Date.parse(DEMO_CLOCK);
 /** The default period a specialist looks at: the 24 hours up to now. */
 export const CURRENT = { from: toLocalIso(now - 24 * HOUR), to: DEMO_CLOCK };
 
+/**
+ * "07:00 IST" for any instant, whatever offset it was written with: a stored
+ * IST timestamp, a UTC "Z" timestamp (a proposal's expiry) or another offset.
+ * Empty for anything that is not a timestamp.
+ */
+export function istClock(iso: unknown): string {
+  if (typeof iso !== "string" || !/T\d{2}:\d{2}/.test(iso)) return "";
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? `${toLocalIso(ms).slice(11, 16)} IST` : "";
+}
+
 export const DEFAULT_THREAD_ID = "local-demo";
