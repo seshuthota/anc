@@ -10,6 +10,7 @@ const { fixturePlan, proposePlan, usePlanModel } = await import("./planner.js");
 const { synthesize, useSynthesisModel } = await import("./synthesis.js");
 const { handleAction, publicState, runInvestigation, store } = await import("./runtime.js");
 const { validateA2UI } = await import("./a2ui-validate.js");
+const { reconcileMetrics } = await import("./reconcile.js");
 
 const coo = resolvePrincipal("user-coo");
 const hubSupervisor = resolvePrincipal("user-hub-hyd");
@@ -106,36 +107,46 @@ describe("planner with a model", () => {
 });
 
 describe("lead analyst", () => {
-  const finding = (id: string, agentId: string, title: string, summary: string): AgentFinding => ({
+  const finding = (id: string, agentId: string, title: string, summary: string, metric?: AgentFinding["claims"][number]["metrics"][number], resultPath?: string): AgentFinding => ({
     findingId: id, taskId: "t", agentId, kind: "observation", title, summary, severity: "high", entities: [], createdAt: new Date().toISOString(), limitations: [],
-    claims: [{ claimId: "c", statement: title, evidenceIds: ["ev"], resultPaths: [], entities: [], metrics: [], limitations: [], contradictoryEvidenceIds: [] }],
+    claims: [{ claimId: "c", statement: title, evidenceIds: ["ev"], resultPaths: resultPath ? [resultPath] : [], entities: [], metrics: metric ? [metric] : [], limitations: [], contradictoryEvidenceIds: [] }],
   });
   const findings = [
     finding("f-belt", "network", "Sorter belt B down at Hyderabad since 22:10", "Hyderabad is sorting 30 parcels an hour against a usual 163."),
-    finding("f-risk", "shipments", "905 parcels promised today are not on a truck", "All 905 are in Hyderabad delivery areas."),
+    finding("f-risk", "shipments", "905 parcels promised today are not on a truck", "All 905 are in Hyderabad delivery areas.",
+      { name: "Parcels at risk today", value: 905, unit: "parcels", aggregation: "count", metricId: "parcels_at_risk_today", scope: { type: "network" }, denominator: { value: 4000, metricId: "parcels_promised_today" } }, "totals.atRisk"),
     finding("f-lockers", "last_mile", "Two Chennai lockers are full", "T. Nagar and Velachery have no free compartments."),
+    finding("f-godavari", "customers", "Godavari Organics has 218 parcels at risk today", "Godavari Organics would miss its commitment.",
+      { name: "Parcels at risk today", value: 218, unit: "parcels", aggregation: "count", metricId: "parcels_at_risk_today", scope: { type: "shipper", id: "shipper-003" } }, "rows.0.atRiskToday"),
   ];
+  const reconciled = reconcileMetrics(findings);
   const good = {
     headline: "A sorter fault at Hyderabad has left 905 parcels at risk today",
+    primaryFindingId: "f-risk",
+    whyItMatters: "That is 905 of 4,000 parcels promised today.",
     steps: [
       { text: "Sorter belt B has been down at Hyderabad since 22:10.", kind: "observed", findingIds: ["f-belt"] },
       { text: "That is the likely reason 905 parcels promised today are not on a truck.", kind: "inferred", findingIds: ["f-belt", "f-risk"] },
     ],
     separate: [{ text: "Two Chennai lockers are full, unrelated to Hyderabad.", findingIds: ["f-lockers"] }],
   };
+  const brief = () => synthesize({ objective: "brief me", audience: "COO", findings, reconciled });
 
   it("uses the deterministic ranker when there is no model", async () => {
-    const outcome = await synthesize({ objective: "brief me", audience: "COO", findings });
+    const outcome = await brief();
     expect(outcome.briefingPlan?.quiet).toBe(false);
-    expect(outcome.synthesis?.headline || outcome.briefingPlan?.primary?.findingId).toBeTruthy();
+    expect(outcome.briefingPlan?.primary?.findingId).toBe("f-risk");
+    expect(outcome.synthesis?.primaryFindingId).toBe("f-risk");
     useSynthesisModel(async () => good);
     const single = await synthesize({ objective: "brief me", audience: "COO", findings: findings.slice(0, 1) });
     expect(single.briefingPlan).toBeTruthy();
   });
 
-  it("accepts an account that cites real findings and keeps inferred links marked", async () => {
+  it("accepts an account about the ranked primary that cites real findings and keeps inferred links marked", async () => {
     useSynthesisModel(async () => good);
-    const { synthesis } = await synthesize({ objective: "brief me", audience: "COO", findings });
+    const { synthesis, reason } = await brief();
+    expect(reason).toBeUndefined();
+    expect(synthesis?.primaryFindingId).toBe("f-risk");
     expect(synthesis?.steps.map((step) => step.kind)).toEqual(["observed", "inferred"]);
     expect(synthesis?.separate[0]?.findingIds).toEqual(["f-lockers"]);
   });
@@ -150,16 +161,51 @@ describe("lead analyst", () => {
     for (const reply of bad) {
       let calls = 0;
       useSynthesisModel(async () => { calls += 1; return reply; });
-      const outcome = await synthesize({ objective: "brief me", audience: "COO", findings });
+      const outcome = await brief();
       expect(outcome.reason).toBeTruthy();
-      expect(outcome.briefingPlan || outcome.synthesis).toBeTruthy();
+      expect(outcome.synthesis?.primaryFindingId).toBe("f-risk");
+      expect(outcome.synthesis?.headline).not.toBe(reply.headline === good.headline ? "__never__" : reply.headline);
       expect(calls).toBe(2);
     }
   });
 
+  it("requires the ranked primary: a missing or different primaryFindingId is rejected", async () => {
+    const { primaryFindingId: _omit, ...withoutPrimary } = good;
+    for (const reply of [withoutPrimary, { ...good, primaryFindingId: "f-belt" }, { ...good, primaryFindingId: "f-godavari", headline: "Godavari Organics is at risk today" }]) {
+      useSynthesisModel(async () => reply);
+      const outcome = await brief();
+      expect(outcome.reason).toMatch(/primaryFindingId/);
+      // The deterministic primary's own title stands in.
+      expect(outcome.synthesis?.headline).toBe("905 parcels promised today are not on a truck");
+    }
+  });
+
+  it("checks headline and whyItMatters figures against the reconciled set: 902 and 218 are refused", async () => {
+    const cases = [
+      { ...good, headline: "Godavari Organics has 218 parcels at risk today" },
+      { ...good, whyItMatters: "Godavari Organics has 218 of them." },
+      { ...good, headline: "902 parcels at risk today" },
+      { ...good, steps: [{ text: "Godavari Organics accounts for 218.", kind: "observed", findingIds: ["f-godavari"] }] },
+    ];
+    for (const reply of cases) {
+      useSynthesisModel(async () => reply);
+      const outcome = await brief();
+      expect(outcome.reason).toMatch(/reconciled|not in the findings/);
+    }
+    // 902 is refused even when a finding mentions it, once reconciliation drops it as a conflict.
+    const conflicting = [...findings, finding("f-902", "customers", "902 parcels at risk", "Disagrees.",
+      { name: "Parcels at risk today", value: 902, unit: "parcels", aggregation: "count", metricId: "parcels_at_risk_today", scope: { type: "network" } }, "totals.atRisk")];
+    useSynthesisModel(async () => ({ ...good, headline: "902 parcels at risk today" }));
+    const outcome = await synthesize({ objective: "brief me", audience: "COO", findings: conflicting, reconciled: reconcileMetrics(conflicting) });
+    // With 905 vs 902 dropped, the qualitative belt fault leads; the model's 902 headline is refused.
+    expect(outcome.briefingPlan?.primary?.findingId).toBe("f-belt");
+    expect(outcome.reason).toMatch(/reconciled|primaryFindingId/);
+    expect(outcome.synthesis?.headline).not.toMatch(/902|905|218/);
+  });
+
   it("uses the rejection as feedback for the retry", async () => {
     useSynthesisModel(async (_request, feedback) => (feedback ? good : { ...good, headline: "9,999 parcels at risk" }));
-    expect((await synthesize({ objective: "brief me", audience: "COO", findings })).synthesis?.headline).toBe(good.headline);
+    expect((await brief()).synthesis?.headline).toBe(good.headline);
   });
 });
 
@@ -175,15 +221,35 @@ describe("a question end to end, without a model", () => {
     expect(Object.keys(findings).length).toBeLessThanOrEqual(4);
     expect(state.surface!.title).toMatch(/at risk|905|Hyderabad|sorter|fault/i);
     expect(JSON.stringify(state.activity)).not.toMatch(/Contradictory records/i);
-    const metrics = (state.surface!.dataModel as { metrics?: Record<string, { label?: string; value?: string }> }).metrics ?? {};
-    const labels = Object.values(metrics).map((metric) => metric.label ?? "");
-    expect(labels.some((label) => /at risk/i.test(label))).toBe(true);
-    expect(Object.values(metrics).some((metric) => String(metric.value).includes("905"))).toBe(true);
+    // Exactly one headline metric: parcels_at_risk_today = 905 of 4,000. No 218 anywhere among headline metrics.
+    const metrics = Object.values((state.surface!.dataModel as { metrics?: Record<string, { metricId?: string; label?: string; value?: string; detail?: string }> }).metrics ?? {});
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0]).toMatchObject({ metricId: "parcels_at_risk_today", value: "905" });
+    expect(metrics[0]!.detail).toMatch(/of 4,000/);
+    expect(metrics.some((metric) => /218/.test(String(metric.value)))).toBe(false);
+    expect(state.surface!.title).not.toMatch(/218|Godavari/);
     for (const item of Object.values(findings)) {
       expect(item.evidenceIds.length).toBeGreaterThan(0);
       for (const id of item.evidenceIds) expect(store.getEvidence(id, coo.id)).toBeTruthy();
     }
   }, 60_000);
+
+  it("ranks the same primary with the same numbers across 5 runs", async () => {
+    const normalize = (text: string) => text.replace(/task-([a-z_]+)-[0-9a-f]{8}/g, "task-$1").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "uuid");
+    const snapshots: string[] = [];
+    for (let run = 0; run < 5; run += 1) {
+      const state = await runInvestigation({ question: "Brief me: what needs my attention this morning?", threadId: `t-determinism-${run}`, principal: coo });
+      const model = state.surface!.dataModel as { title?: string; subtitle?: string; metrics?: object; findings?: Record<string, { title: string }> };
+      snapshots.push(normalize(JSON.stringify({
+        title: state.surface!.title,
+        subtitle: model.subtitle,
+        metrics: model.metrics,
+        findings: Object.entries(model.findings ?? {}).map(([id, item]) => [id, item.title]),
+      })));
+    }
+    expect(new Set(snapshots).size).toBe(1);
+    expect(snapshots[0]).toMatch(/parcels_at_risk_today/);
+  }, 180_000);
 
   it("builds a table from the tool's own rows for a specific question", async () => {
     const state = await runInvestigation({ question: "Which parcel lockers are full?", threadId: "t-lockers", principal: coo });

@@ -1,4 +1,4 @@
-import type { AgentFinding, Metric } from "@anc/contracts";
+import type { AgentFinding } from "@anc/contracts";
 import { getMetricDefinition, type MetricScopeType, type MetricWindowId } from "@anc/contracts";
 
 export type ReconciledMetric = {
@@ -15,6 +15,15 @@ export type ReconciledMetric = {
   findingIds: string[];
   /** Present when this is a child scope of another reconciled metric with the same metricId. */
   ofWhichOf?: string;
+  /**
+   * Present when this is narrower than the metric's canonical scope but no parent
+   * survived reconciliation (the parent conflicted, or no parent was reported).
+   * Such a child is still never a headline: an orphaned shipper figure must not be
+   * promoted to stand in for the network figure.
+   */
+  orphaned?: "parent_conflicted" | "parent_missing";
+  /** Only a canonical-scope, unconflicted, evidence-path-bound metric may be the headline number. */
+  headlineEligible: boolean;
 };
 
 export type ReconcileResult = {
@@ -42,7 +51,7 @@ const SCOPE_RANK: Record<MetricScopeType, number> = {
   locker: 2,
 };
 
-function scopeKey(scope: { type: MetricScopeType; id?: string }): string {
+export function scopeKey(scope: { type: MetricScopeType; id?: string }): string {
   return scope.id ? `${scope.type}:${scope.id}` : scope.type;
 }
 
@@ -64,6 +73,10 @@ function collect(findings: AgentFinding[]): Candidate[] {
         if (!metricId) continue;
         const def = getMetricDefinition(metricId);
         if (!def) continue;
+        // A registry id must come with the evidence path it was read from; otherwise
+        // the figure was never checked and is prose only.
+        const resultPaths = metric.resultPath ? [metric.resultPath] : claim.resultPaths;
+        if (!resultPaths.length) continue;
         const scope = metric.scope ?? { type: def.scopeType };
         out.push({
           metricId,
@@ -71,14 +84,20 @@ function collect(findings: AgentFinding[]): Candidate[] {
           scope: { type: scope.type, id: scope.id },
           window: def.window,
           denominator: metric.denominator,
-          evidenceIds: [...claim.evidenceIds],
-          resultPaths: [...claim.resultPaths],
+          evidenceIds: metric.evidenceId ? [metric.evidenceId] : [...claim.evidenceIds],
+          resultPaths: [...resultPaths],
           findingId: finding.findingId,
         });
       }
     }
   }
   return out;
+}
+
+/** Narrower than the scope the metric is defined at (for example a shipper slice of a network metric). */
+function isBelowCanonical(metricId: string, scope: { type: MetricScopeType }): boolean {
+  const def = getMetricDefinition(metricId);
+  return Boolean(def && scope.type !== def.scopeType && isChildScope(scope, { type: def.scopeType }));
 }
 
 /**
@@ -96,17 +115,15 @@ export function reconcileMetrics(findings: AgentFinding[]): ReconcileResult {
     byGroup.set(key, list);
   }
 
-  const notes: string[] = [];
   const conflicts: ReconcileResult["conflicts"] = [];
   const merged: ReconciledMetric[] = [];
 
   for (const [key, items] of byGroup) {
-    const values = [...new Set(items.map((item) => item.value))];
+    const values = [...new Set(items.map((item) => item.value))].sort((a, b) => b - a);
     const sample = items[0]!;
     const def = getMetricDefinition(sample.metricId)!;
     if (values.length > 1) {
       const note = `${def.label} disagree (${values.map((value) => value.toLocaleString("en-IN")).join(" vs ")}); not shown until resolved`;
-      notes.push(note);
       conflicts.push({ metricId: sample.metricId, scopeKey: scopeKey(sample.scope), values, note });
       continue;
     }
@@ -122,10 +139,13 @@ export function reconcileMetrics(findings: AgentFinding[]): ReconcileResult {
       evidenceIds: [...new Set(items.flatMap((item) => item.evidenceIds))],
       resultPaths: [...new Set(items.flatMap((item) => item.resultPaths))],
       findingIds: [...new Set(items.map((item) => item.findingId))],
+      headlineEligible: true,
     });
   }
 
-  // Child scopes of a parent with the same metricId become of-which only.
+  // Child scopes of a parent with the same metricId become of-which only. A child
+  // below the metric's canonical scope stays non-headline even when its parent is
+  // gone: dropped as a conflict, or never reported.
   for (const metric of merged) {
     const parent = merged.find((other) =>
       other !== metric
@@ -133,13 +153,38 @@ export function reconcileMetrics(findings: AgentFinding[]): ReconcileResult {
       && other.window === metric.window
       && isChildScope(metric.scope, other.scope),
     );
-    if (parent) metric.ofWhichOf = `${parent.metricId}|${scopeKey(parent.scope)}|${parent.window}`;
+    if (parent) {
+      metric.ofWhichOf = `${parent.metricId}|${scopeKey(parent.scope)}|${parent.window}`;
+      metric.headlineEligible = false;
+      continue;
+    }
+    if (isBelowCanonical(metric.metricId, metric.scope)) {
+      const parentConflicted = conflicts.some((conflict) => conflict.metricId === metric.metricId);
+      metric.orphaned = parentConflicted ? "parent_conflicted" : "parent_missing";
+      metric.headlineEligible = false;
+    }
   }
 
-  return { metrics: merged, conflicts, notes };
+  // Pure and order-independent: specialists finish in any order, so sort by group key.
+  const keyOf = (metric: ReconciledMetric) => `${metric.metricId}|${scopeKey(metric.scope)}|${metric.window}`;
+  merged.sort((left, right) => keyOf(left).localeCompare(keyOf(right)));
+  for (const metric of merged) {
+    metric.evidenceIds.sort();
+    metric.resultPaths.sort();
+    metric.findingIds.sort();
+  }
+  conflicts.sort((left, right) => `${left.metricId}|${left.scopeKey}`.localeCompare(`${right.metricId}|${right.scopeKey}`));
+  return { metrics: merged, conflicts, notes: conflicts.map((conflict) => conflict.note) };
 }
 
-/** Metrics eligible for the primary headline number (registry-backed, not of-which children, not conflicted). */
+/** Metrics eligible for the primary headline number (registry-backed, canonical scope, not of-which children, not conflicted). */
 export function headlineMetrics(result: ReconcileResult): ReconciledMetric[] {
-  return result.metrics.filter((metric) => !metric.ofWhichOf);
+  return result.metrics.filter((metric) => metric.headlineEligible && !metric.ofWhichOf);
+}
+
+/** Every registry metric id a finding cites with a checked evidence path, whether or not it survived reconciliation. */
+export function citedMetricIds(finding: AgentFinding): string[] {
+  return [...new Set(finding.claims.flatMap((claim) => claim.metrics
+    .filter((metric) => metric.metricId && getMetricDefinition(metric.metricId) && (metric.resultPath || claim.resultPaths.length))
+    .map((metric) => metric.metricId!)))];
 }

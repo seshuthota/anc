@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
-import { PRESENTATION_VIEWS, type AgentFinding, type Domain, type EntityRef, type InvestigationTask, type PresentationInput, type SemanticAction, type TaskResult } from "@anc/contracts";
+import { PRESENTATION_VIEWS, getMetricDefinition, type AgentFinding, type Domain, type EntityRef, type InvestigationTask, type PresentationInput, type SemanticAction, type TaskResult } from "@anc/contracts";
 import type { Principal } from "@anc/policy";
 import { hasGrant } from "@anc/policy";
 import { peekSubstitutions } from "./execution.js";
 import { isBroadObjective, MAX_TASKS, proposePlan, validatePlan } from "./planner.js";
 import { synthesize, type Synthesis } from "./synthesis.js";
-import { reconcileMetrics, type ReconcileResult } from "./reconcile.js";
+import { headlineMetrics, reconcileMetrics, type ReconcileResult } from "./reconcile.js";
 import { rankBriefing, type BriefingPlan } from "./rank.js";
 import { RuntimeStore } from "@anc/runtime-storage";
 import { validateA2UI } from "./a2ui-validate.js";
@@ -384,8 +384,10 @@ const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
  * from stored evidence or checked findings; nothing is authored at this step.
  */
 export function toPresentation(source: PresentationSource): PresentationInput {
-  const { intent, objective, failedDomains = [], artifacts = [], view, clarification, synthesis, principal, reconciled, briefingPlan } = source;
-  const findings = [...source.findings].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
+  const { intent, objective, failedDomains = [], artifacts = [], view, clarification, principal, reconciled, briefingPlan } = source;
+  // Specialists finish in any order; sort on content (not arrival or random ids) so the same data lays out the same way.
+  const findings = [...source.findings].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
+    || a.agentId.localeCompare(b.agentId) || a.title.localeCompare(b.title));
   const question = clarification ?? (intent === "clarification" ? "A detail is needed before this can be answered." : undefined);
   if (question) {
     return { title: "One detail is needed", subtitle: question, view: "summary", metrics: [], findings: [], actions: [], limitations: ["Answering now would mean guessing. Nothing has been assumed on your behalf."] };
@@ -399,17 +401,25 @@ export function toPresentation(source: PresentationSource): PresentationInput {
   }
 
   const plan = briefingPlan ?? (reconciled ? rankBriefing({ findings, reconciled, principal }) : undefined);
+  // The Lead Analyst's headline and whyItMatters stand only when they describe the
+  // ranked primary. With a plan but no primary (quiet, or withheld), there is no headline to write.
+  const synthesis = plan
+    ? (plan.primary && source.synthesis?.primaryFindingId === plan.primary.findingId ? source.synthesis : undefined)
+    : source.synthesis;
   const evidenceOf = (ids: string[]) => [...new Set(findings.filter((finding) => ids.includes(finding.findingId)).flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds)))];
 
-  // Metrics come only from the reconciled set (never a raw flatten of every claim).
-  const reconciledMetrics = (reconciled?.metrics ?? []).filter((metric) => !metric.ofWhichOf);
-  const metrics = reconciledMetrics.slice(0, 4).map((metric) => {
+  // Metrics come only from the reconciled set (never a raw flatten of every claim),
+  // and only headline-eligible ones: no of-which child, orphan, or conflicted value.
+  const reconciledMetrics = reconciled ? headlineMetrics(reconciled) : [];
+  const allMetrics = reconciledMetrics.map((metric) => {
     const ratio = /ratio|rate|percent|share/i.test(metric.unit) && metric.value >= 0 && metric.value <= 1;
     const percent = /percent/i.test(metric.unit) && metric.value > 1;
     const value = ratio ? `${(metric.value * 100).toFixed(1)}%` : percent ? `${metric.value.toFixed(1)}%` : metric.value.toLocaleString("en-IN", { maximumFractionDigits: 1 });
-    const den = metric.denominator ? ` of ${metric.denominator.value.toLocaleString("en-IN")}` : "";
+    const denominatorLabel = metric.denominator?.metricId ? getMetricDefinition(metric.denominator.metricId)?.label.toLowerCase() : undefined;
+    const den = metric.denominator ? ` · of ${metric.denominator.value.toLocaleString("en-IN")}${denominatorLabel ? ` ${denominatorLabel}` : ""}` : "";
     return {
       id: `${metric.metricId}-${metric.scope.type}-${metric.scope.id ?? "all"}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+      metricId: metric.metricId,
       label: metric.label,
       value,
       detail: metric.definition + den,
@@ -417,6 +427,7 @@ export function toPresentation(source: PresentationSource): PresentationInput {
       tone: metric.value > 0 && (metric.metricId === "parcels_at_risk_today" || metric.scope.type === "network") ? "danger" as const : "neutral" as const,
     };
   }).filter((metric) => metric.evidenceId);
+  const metrics = allMetrics.slice(0, 4);
 
   const primaryFinding = plan?.primary ? findings.find((finding) => finding.findingId === plan.primary!.findingId) : undefined;
   const secondaryIds = new Set(plan?.secondary.map((item) => item.findingId) ?? []);
@@ -428,7 +439,9 @@ export function toPresentation(source: PresentationSource): PresentationInput {
           // Keep remaining findings available for non-briefing views.
           ...(!isBroadObjective(objective) ? findings.filter((finding) => finding.findingId !== plan.primary!.findingId && !secondaryIds.has(finding.findingId)) : []),
         ]
-      : findings
+      // No primary on a briefing: only the ranked secondary items, never the
+      // conflicted findings whose figures were withheld.
+      : plan && isBroadObjective(objective) ? findings.filter((finding) => secondaryIds.has(finding.findingId)) : findings
   ).map((finding) => ({
     id: finding.findingId,
     title: finding.title,
@@ -452,7 +465,7 @@ export function toPresentation(source: PresentationSource): PresentationInput {
   const rowAction = tablePayload?.rowAction && (!principal || hasGrant(principal, "cap.complaints.assign")) ? tablePayload.rowAction : undefined;
   const rows = (tablePayload?.rows ?? []).map((row) => ({ ...row, actionName: rowAction?.name }));
   const resolvedView = resolveView(view, { hasTable: rows.length > 0, hasChart: points.length >= 2, hasForm: intent === "prepare_assignment" || intent === "commit_assignment" });
-  const quiet = plan ? plan.primary === undefined : false;
+  const quiet = plan ? plan.quiet : false;
   const single = resolvedView !== "summary" && !synthesis;
   const title = synthesis?.headline
     ?? (plan?.primary && primaryFinding ? primaryFinding.title : undefined)
@@ -460,7 +473,7 @@ export function toPresentation(source: PresentationSource): PresentationInput {
     ?? (broad ? (quiet ? "Nothing needs your attention this morning" : "This morning") : (presentationFindings[0]?.title ?? "Results"));
   const subtitle = quiet && broad
     ? "The network is running to plan as far as the specialists could see."
-    : (synthesis?.whyItMatters ?? primaryFinding?.summary ?? presentationFindings[0]?.body ?? "Records from the company's systems.");
+    : (synthesis?.whyItMatters ?? plan?.primary?.whyItMatters ?? primaryFinding?.summary ?? (plan?.withheld && broad ? "The specialists found something serious, but no single figure can headline it yet." : undefined) ?? presentationFindings[0]?.body ?? "Records from the company's systems.");
   const numericColumn = rows[0]?.sortValues?.findIndex((value) => Number.isFinite(value)) ?? -1;
 
   return {
@@ -474,10 +487,11 @@ export function toPresentation(source: PresentationSource): PresentationInput {
     } : undefined,
     metrics: resolvedView === "table" ? [] : (() => {
       if (broad && quiet) return [];
-      if (!(broad && plan?.primary?.metric)) return metrics;
-      const primaryId = plan.primary.metric.metricId.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const matched = metrics.filter((metric) => metric.id.startsWith(primaryId)).slice(0, 1);
-      return matched.length ? matched : metrics.slice(0, 1);
+      if (!broad) return metrics;
+      // A briefing shows exactly the primary's own figure, or none.
+      const primaryMetric = plan?.primary?.metric;
+      if (!primaryMetric) return [];
+      return allMetrics.filter((metric) => metric.metricId === primaryMetric.metricId && metric.id === `${primaryMetric.metricId}-${primaryMetric.scope.type}-${primaryMetric.scope.id ?? "all"}`.replace(/[^a-zA-Z0-9_-]/g, "_")).slice(0, 1);
     })(),
     findings: broad && quiet ? [] : broad && plan ? presentationFindings.slice(0, 1 + (plan.secondary.length)) : presentationFindings,
     chart: points.length >= 2 ? {
@@ -499,6 +513,7 @@ export function toPresentation(source: PresentationSource): PresentationInput {
     limitations: [
       ...unavailable,
       ...(reconciled?.notes ?? []),
+      plan?.withheld ?? "",
       synthesis?.steps.some((step) => step.kind === "inferred") ? "Links marked as inferred are the analyst's reasoning across findings, not something a system recorded." : "",
       objective && !broad ? `Question: ${objective}` : "",
     ].filter(Boolean),

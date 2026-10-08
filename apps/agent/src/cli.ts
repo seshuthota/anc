@@ -51,10 +51,10 @@ function inspectSurface(state: ReturnType<typeof publicState>) {
   const hasPrimaryFinding = components.some((component) =>
     component.component === "PrimaryFinding" || component.id === "primary_finding" || component.id === "primary_block");
   const metricsModel = dataModel.metrics && typeof dataModel.metrics === "object"
-    ? Object.values(dataModel.metrics as Record<string, { label?: string; value?: string; detail?: string }>)
+    ? Object.values(dataModel.metrics as Record<string, { metricId?: string; label?: string; value?: string; detail?: string }>)
     : [];
   const primaryMetric = metricsModel[0]
-    ? { label: metricsModel[0].label ?? null, value: metricsModel[0].value ?? null, detail: metricsModel[0].detail ?? null }
+    ? { metricId: metricsModel[0].metricId ?? null, label: metricsModel[0].label ?? null, value: metricsModel[0].value ?? null, detail: metricsModel[0].detail ?? null }
     : null;
   return {
     title: state.surface?.title ?? null,
@@ -64,6 +64,7 @@ function inspectSurface(state: ReturnType<typeof publicState>) {
     stats: components.filter((component) => component.component === "Stat").length,
     buttons: components.filter((component) => component.component === "Button").length,
     metricLabels,
+    headlineMetricCount: metricsModel.length,
     primaryMetric,
     contradictionActivityLines: contradictionLines,
     hasPrimaryFinding: hasPrimaryFinding || Boolean(primaryMetric && state.surface?.title && state.surface.title !== "Nothing needs your attention this morning"),

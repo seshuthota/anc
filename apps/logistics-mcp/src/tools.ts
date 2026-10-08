@@ -128,7 +128,10 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
     return run("list_equipment_events", args, { rows }, { hubId: args.hubId, openOnly: Boolean(args.openOnly), window });
   });
 
-  server.registerTool("list_route_runs", { description: "Delivery route runs for a service date (default today): scheduled and actual departure, minutes late, and parcels planned against parcels loaded. A held run has not left.", inputSchema: z.object({ serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), hubId: z.string().optional(), status: z.enum(["scheduled", "held", "departed", "completed"]).optional() }) }, (args: any) => {
+  // The default service date is today's briefing window: the runs for the as-of day
+  // (Mon 21 Sep 2026, as of 07:00 IST). The metric registry binds totals.held and
+  // totals.parcelsLeftBehind to "today" only when serviceDate is that day.
+  server.registerTool("list_route_runs", { description: "Delivery route runs for a service date (default today, the as-of day of this briefing): scheduled and actual departure, minutes late, and parcels planned against parcels loaded. A held run has not left. Totals cover the runs returned.", inputSchema: z.object({ serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), hubId: z.string().optional(), status: z.enum(["scheduled", "held", "departed", "completed"]).optional() }) }, (args: any) => {
     const serviceDate = args.serviceDate ?? TODAY;
     const rows = (db.prepare(`SELECT r.id, r.service_date serviceDate, r.hub_id hubId, r.district_id districtId, d.name districtName, r.wave, r.truck_id truckId, r.driver_name driverName,
       r.scheduled_departure scheduledDeparture, r.actual_departure actualDeparture, r.status, r.parcels_planned parcelsPlanned, r.parcels_loaded parcelsLoaded
@@ -147,7 +150,7 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
       // Short-loaded departed runs only: planned parcels that never boarded.
       parcelsLeftBehind: rows.filter((row) => row.status === "departed").reduce((sum, row) => sum + row.parcelsLeftBehind, 0),
     };
-    return run("list_route_runs", args, { serviceDate, rows, totals }, { serviceDate, hubId: args.hubId, status: args.status });
+    return run("list_route_runs", args, { asOf: NOW, serviceDate, rows, totals }, { serviceDate, hubId: args.hubId, status: args.status });
   });
 
   // ---- Shipments: individual parcels, what is at risk, delivery performance ----
@@ -269,8 +272,11 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
     const rows = db.prepare(`SELECT c.id, c.shipper_id shipperId, sh.name shipperName, c.shipment_id shipmentId, c.created_at createdAt, c.category, c.subject, c.status, c.assignee_id assigneeId, c.version
       FROM complaints c JOIN shippers sh ON sh.id = c.shipper_id ${where} ORDER BY c.created_at DESC LIMIT ? OFFSET ?`).all(...params, page.limit, page.offset);
     const byCategory = db.prepare(`SELECT c.category, COUNT(*) complaints, SUM(c.assignee_id IS NULL) unassigned FROM complaints c ${where} GROUP BY c.category ORDER BY complaints DESC`).all(...params);
-    const unassigned = (byCategory as Array<{ unassigned: number }>).reduce((sum, row) => sum + Number(row.unassigned ?? 0), 0);
-    return run("list_complaints", args, { rows, byCategory, page, total, totals: { open: total, unassigned } }, { ...args, page }, { complete: page.offset + rows.length >= total, limit: page.limit, offset: page.offset, total });
+    // Totals over the complaints matching the filters. `open` and `unassigned` count
+    // open complaints only, whatever the status filter, so `unassigned` always means
+    // "open with no owner" (the complaints_open_unassigned metric).
+    const counts = db.prepare(`SELECT COUNT(*) matching, COALESCE(SUM(c.status = 'open'), 0) open, COALESCE(SUM(c.status = 'open' AND c.assignee_id IS NULL), 0) unassigned FROM complaints c ${where}`).get(...params) as { matching: number; open: number; unassigned: number };
+    return run("list_complaints", args, { rows, byCategory, page, total, totals: { matching: counts.matching, open: counts.open, unassigned: counts.unassigned } }, { ...args, page }, { complete: page.offset + rows.length >= total, limit: page.limit, offset: page.offset, total });
   });
 
   server.registerTool("list_eligible_assignees", { description: "Employees who can own a complaint.", inputSchema: z.object({ team: z.string().default("customer-care") }) }, (args: any) => {

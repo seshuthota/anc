@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import { z } from "zod";
-import { AgentFindingSchema, ClaimSchema, EntityRefSchema, MetricSchema, metricIdForSource, getMetricDefinition, type AgentFinding, type Domain, type InvestigationTask, type Metric, type TaskResult } from "@anc/contracts";
+import { AgentFindingSchema, ClaimSchema, EntityRefSchema, MetricSchema, type AgentFinding, type Domain, type InvestigationTask, type TaskResult } from "@anc/contracts";
+import { bindClaimMetric } from "../metric-binding.js";
 import type { RuntimeStore } from "@anc/runtime-storage";
 import { resolvePrincipal } from "@anc/policy";
 import { CompanyMcpClient } from "../mcp-client.js";
@@ -10,7 +11,7 @@ import { saveCapabilityArtifacts } from "../artifacts.js";
 import { authorizedTools, capabilityForTool } from "../registry.js";
 import { peekUsage, recordUsage } from "../usage.js";
 import { DEMO_CLOCK } from "../windows.js";
-import { validateFinding } from "../validation.js";
+import { stripRuntimeMetricFields, validateFinding } from "../validation.js";
 
 /**
  * What the model is asked to write. Identifiers and timestamps are assigned by
@@ -52,45 +53,22 @@ const OUTPUT_CONTRACT = `When you have the evidence you need, reply with one JSO
 Write for a busy reader: titles under ten words, summaries one or two sentences. Name places and shippers by their names, not their ids. Write rates as percentages. Times are India Standard Time; write them as clock times (for example 22:10). Report only findings that bear on the question, at most four, and do not report on the tooling or data provenance.
 A metric is checked against the evidence: give resultPaths pointing at the exact number, and copy the value unchanged. Leave metrics out when you cannot point at the number. Tool windows are {"from", "to"} ISO timestamps. The company data is a snapshot as of "now"; treat that as the present. Use defaultWindow unless the question asks for a different period, in which case derive the window from now.`;
 
+function annotateMetrics(store: RuntimeStore, finding: AgentFinding): AgentFinding {
+  return {
+    ...finding,
+    claims: finding.claims.map((claim) => ({
+      ...claim,
+      metrics: claim.metrics.map((metric) => bindClaimMetric(store, claim, metric)),
+    })),
+  };
+}
+
 /**
  * Validates a model finding. A metric the evidence does not bear out is removed
  * rather than taking the whole finding with it: an unverified number must not
  * become a metric, but the cited observation is still worth showing. Unknown
  * evidence IDs still reject the finding.
  */
-
-/** Map each metric onto a registry metricId from (tool, resultPath) when possible. */
-function annotateMetrics(store: RuntimeStore, finding: AgentFinding): AgentFinding {
-  return {
-    ...finding,
-    claims: finding.claims.map((claim) => ({
-      ...claim,
-      metrics: claim.metrics.map((metric) => {
-        if (metric.metricId) return metric;
-        for (const evidenceId of claim.evidenceIds) {
-          const evidence = store.getEvidence(evidenceId) as { tool?: string } | undefined;
-          const tool = evidence?.tool;
-          if (!tool) continue;
-          for (const path of claim.resultPaths) {
-            const metricId = metricIdForSource(tool, path);
-            if (!metricId) continue;
-            const def = getMetricDefinition(metricId);
-            const next: Metric = {
-              ...metric,
-              metricId,
-              name: def?.label ?? metric.name,
-              unit: def?.unit ?? metric.unit,
-              scope: metric.scope ?? (def ? { type: def.scopeType } : undefined),
-            };
-            return next;
-          }
-        }
-        return metric;
-      }),
-    })),
-  };
-}
-
 function validated(store: RuntimeStore, finding: AgentFinding): AgentFinding {
   try {
     return annotateMetrics(store, validateFinding(store, finding));
@@ -214,7 +192,12 @@ function tidy(item: unknown): unknown {
         ...value,
         resultPaths: strings(value.resultPaths),
         entities: entities(value.entities),
-        metrics: (Array.isArray(value.metrics) ? value.metrics : []).filter((metric) => MetricSchema.safeParse(metric).success),
+        // metricId, scope, denominator, resultPath and evidenceId are the runtime's to set,
+        // from (tool, resultPath) only; whatever the model wrote there is discarded.
+        metrics: (Array.isArray(value.metrics) ? value.metrics : []).flatMap((metric) => {
+          const parsed = MetricSchema.safeParse(metric);
+          return parsed.success ? [stripRuntimeMetricFields(parsed.data)] : [];
+        }),
         limitations: strings(value.limitations),
         contradictoryEvidenceIds: strings(value.contradictoryEvidenceIds),
       };

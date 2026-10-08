@@ -22,8 +22,18 @@ export const MetricSchema = z.object({
   denominator: z.object({
     value: z.number().finite(),
     metricId: z.string().min(1).optional()
-  }).optional()
+  }).optional(),
+  /**
+   * Set by the runtime only, never by a model: the exact evidence path and evidence
+   * id the registry binding was read from. A registry metric without them is not
+   * eligible as a headline figure.
+   */
+  resultPath: z.string().min(1).optional(),
+  evidenceId: z.string().min(1).optional()
 });
+
+/** Metric fields only the runtime may set. A model's reply is stripped of them before validation. */
+export const RUNTIME_METRIC_FIELDS = ["metricId", "scope", "denominator", "resultPath", "evidenceId"] as const;
 
 export const ClaimSchema = z.object({
   claimId: z.string().min(1),

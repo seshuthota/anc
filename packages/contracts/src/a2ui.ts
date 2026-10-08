@@ -17,6 +17,8 @@ export type A2UIMessage = z.infer<typeof A2UIMessageSchema>;
 
 export const PresentationMetricSchema = z.object({
   id: z.string().min(1),
+  /** Canonical registry id of a reconciled metric. */
+  metricId: z.string().min(1).optional(),
   label: z.string().min(1),
   value: z.string().min(1),
   detail: z.string().optional(),

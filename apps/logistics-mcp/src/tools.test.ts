@@ -55,6 +55,31 @@ describe("logistics MCP tools", () => {
     db.close();
   });
 
+  it("defaults route runs to today's briefing window, as of 07:00 IST", () => {
+    const { db, call } = harness();
+    const runs = call("list_route_runs").result;
+    expect(runs.serviceDate).toBe("2026-09-21");
+    expect(runs.asOf).toMatch(/^2026-09-21T07:00/);
+    expect(runs.rows.every((row: any) => row.serviceDate === "2026-09-21")).toBe(true);
+    expect(call("list_route_runs", { serviceDate: "2026-09-20" }).result.serviceDate).toBe("2026-09-20");
+    db.close();
+  });
+
+  it("labels complaint totals: matching counts the filter, open and unassigned count open complaints only", () => {
+    const { db, call } = harness();
+    const all = call("list_complaints").result;
+    const openCount = (db.prepare("SELECT COUNT(*) n FROM complaints WHERE status = 'open'").get() as { n: number }).n;
+    const openUnassigned = (db.prepare("SELECT COUNT(*) n FROM complaints WHERE status = 'open' AND assignee_id IS NULL").get() as { n: number }).n;
+    const everything = (db.prepare("SELECT COUNT(*) n FROM complaints").get() as { n: number }).n;
+    expect(all.totals.matching).toBe(everything);
+    expect(all.totals.open).toBe(openCount);
+    expect(all.totals.unassigned).toBe(openUnassigned);
+    const open = call("list_complaints", { status: "open" }).result;
+    expect(open.totals).toEqual({ matching: openCount, open: openCount, unassigned: openUnassigned });
+    expect(call("list_complaints", { status: "closed" }).result.totals.open).toBe(0);
+    db.close();
+  });
+
   it("agrees with itself on what is at risk, however it is grouped", () => {
     const { db, call } = harness();
     const byHub = call("summarize_at_risk_shipments", { groupBy: "hub" }).result;

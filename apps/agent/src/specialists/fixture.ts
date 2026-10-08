@@ -1,21 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { AgentFinding, InvestigationTask, Metric, TaskResult } from "@anc/contracts";
-import { getMetricDefinition } from "@anc/contracts";
+import { bindRegistryMetric, readResultPath, type EvidenceLike } from "@anc/contracts";
 import type { RuntimeStore } from "@anc/runtime-storage";
 import { saveCapabilityArtifacts } from "../artifacts.js";
 import { CompanyMcpClient } from "../mcp-client.js";
 import { CAPABILITIES } from "../registry.js";
 import { validateFinding } from "../validation.js";
 
-function readPath(value: unknown, path: string): unknown {
-  if (!path) return undefined;
-  return path.split(".").reduce<unknown>((current, part) => {
-    if (current && typeof current === "object" && part in (current as object)) {
-      return (current as Record<string, unknown>)[part];
-    }
-    return undefined;
-  }, value);
-}
 
 /**
  * The specialist used when no model is configured. It calls each capability a
@@ -40,9 +31,6 @@ export async function runFixtureSpecialist(store: RuntimeStore, task: Investigat
       const headline = def.headline;
       const row = headline?.pickRow ? headline.pickRow(rows) : rows[0];
       const path = headline?.path ?? "";
-      const pathForRead = path.startsWith("rows.") && !path.match(/^rows\.\d/) && row
-        ? path // value comes from row field below
-        : path;
       let value: number | undefined;
       let resultPath = path;
       if (path.startsWith("rows.") && row) {
@@ -54,7 +42,7 @@ export async function runFixtureSpecialist(store: RuntimeStore, task: Investigat
           resultPath = `rows.${Math.max(0, index)}.${field}`;
         }
       } else if (path) {
-        const raw = readPath(result, pathForRead);
+        const raw = readResultPath(result, path);
         if (typeof raw === "number" && Number.isFinite(raw)) {
           value = raw;
           resultPath = path;
@@ -100,32 +88,25 @@ export async function runFixtureSpecialist(store: RuntimeStore, task: Investigat
       const severity = headline ? headline.severity(value, result, row) : (value > 0 ? "medium" : "info");
       if (severity === "info" && value === 0) continue;
 
-      const metricId = headline?.metricId;
-      const definition = metricId ? getMetricDefinition(metricId) : undefined;
-      let denominator: Metric["denominator"];
-      if (headline?.denominatorPath) {
-        const den = readPath(result, headline.denominatorPath);
-        if (typeof den === "number" && Number.isFinite(den)) {
-          denominator = { value: den, metricId: definition?.denominatorId };
-        }
-      }
-      let metricScope: Metric["scope"];
-      if (headline?.scopeType === "network") {
-        metricScope = { type: "network" };
-      } else if (headline?.scopeType && row && headline.scopeIdFrom?.startsWith("row:")) {
-        const field = headline.scopeIdFrom.slice("row:".length);
-        const id = row[field];
-        if (typeof id === "string" && id) metricScope = { type: headline.scopeType, id };
-      }
-
-      const metrics: Metric[] = [{
-        name: definition?.label ?? metricId ?? "value",
+      // Metric id, scope and denominator come from the registry binding of (tool, path),
+      // the same runtime mapping a live specialist's figures go through.
+      const bound = bindRegistryMetric(evidence as EvidenceLike, resultPath, value);
+      const binding = bound && (!headline?.metricId || bound.metricId === headline.metricId) ? bound : undefined;
+      const metrics: Metric[] = [binding ? {
+        name: binding.definition.label,
         value,
-        unit: definition?.unit ?? "count",
+        unit: binding.definition.unit,
         aggregation: "count",
-        metricId,
-        scope: metricScope,
-        denominator,
+        metricId: binding.metricId,
+        scope: binding.scope,
+        denominator: binding.denominator,
+        resultPath,
+        evidenceId: String(evidence.evidenceId),
+      } : {
+        name: "value",
+        value,
+        unit: "count",
+        aggregation: "count",
       }];
 
       const findingId = `finding-${task.taskId}-${def.tool}`;
@@ -154,14 +135,14 @@ export async function runFixtureSpecialist(store: RuntimeStore, task: Investigat
         limitations: [],
       });
     }
-    for (const item of findings) validateFinding(store, item);
-    for (const item of findings) store.saveFinding({ findingId: item.findingId, runId, taskId: task.taskId, payload: item, now: new Date().toISOString() });
+    const checked = findings.map((item) => validateFinding(store, item));
+    for (const item of checked) store.saveFinding({ findingId: item.findingId, runId, taskId: task.taskId, payload: item, now: new Date().toISOString() });
     return {
       taskId: task.taskId,
-      status: findings.length ? "completed" : "partial",
-      findingIds: findings.map((item) => item.findingId),
-      findings,
-      unresolvedQuestions: findings.length ? [] : ["Nothing could be looked up for this task"],
+      status: checked.length ? "completed" : "partial",
+      findingIds: checked.map((item) => item.findingId),
+      findings: checked,
+      unresolvedQuestions: checked.length ? [] : ["Nothing could be looked up for this task"],
       suggestedFollowUps: [],
     };
   } catch (error) {

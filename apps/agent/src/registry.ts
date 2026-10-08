@@ -25,18 +25,16 @@ export type CapabilityDefinition = {
   /** Arguments used when no model is choosing them. `undefined` means the tool needs a record that is not in scope. */
   defaults?: (scope: Record<string, string | undefined>) => Record<string, unknown> | undefined;
   /**
-   * Fixture (and deterministic) headline: which metric in the tool result is the
-   * finding's figure, how severe it is, and how to title it. Live specialists
-   * still author titles; they only inherit metricId mapping from the registry.
+   * Fixture (and deterministic) headline: which figure in the tool result is the
+   * finding's figure, how severe it is, and how to title it. The metric id, scope
+   * and denominator are not declared here: they are bound from (tool, path) through
+   * the metric registry (`bindRegistryMetric`), exactly as for live specialists.
    */
   headline?: {
+    /** The registry metric the path is expected to bind to (checked in tests). */
     metricId?: string;
     /** Dot path into evidence.result for the primary figure. Empty for qualitative findings. */
     path: string;
-    denominatorPath?: string;
-    scopeType: "network" | "hub" | "shipper" | "district" | "locker";
-    /** When scope is not network: row field holding the scope id, or a fixed id. */
-    scopeIdFrom?: "row:hubId" | "row:shipperId" | "row:id" | "row:districtId" | string;
     /** Pick the row that headlines when the path is under rows.*. */
     pickRow?: (rows: Array<Record<string, unknown>>) => Record<string, unknown> | undefined;
     title: (ctx: { value: number; row?: Record<string, unknown>; result: Record<string, unknown> }) => string;
@@ -63,8 +61,6 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     headline: {
       metricId: "parcels_waiting_to_sort",
       path: "rows.parcelsWaitingToSort",
-      scopeType: "hub",
-      scopeIdFrom: "row:hubId",
       pickRow: (rows) => [...rows].sort((a, b) => Number(b.parcelsWaitingToSort ?? 0) - Number(a.parcelsWaitingToSort ?? 0))[0],
       title: ({ value, row }) => `${row?.name ?? "Hub"} has ${value.toLocaleString("en-IN")} parcels waiting to sort`,
       summary: ({ value, row }) => `Sorted ${Number(row?.sortedLastHour ?? 0).toLocaleString("en-IN")} in the last hour against a usual ${Number(row?.usualSortRatePerHour ?? 0).toLocaleString("en-IN")} per hour.`,
@@ -80,8 +76,6 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     columns: [["hubName", "Hub"], ["equipment", "Equipment"], ["startedAt", "Since"], ["severity", "Severity"], ["summary", "What happened"]],
     headline: {
       path: "",
-      scopeType: "hub",
-      scopeIdFrom: "row:hubId",
       pickRow: (rows) => rows.find((row) => String(row.severity) === "high") ?? rows[0],
       title: ({ row }) => row ? `${row.hubName ?? "Hub"}: ${row.equipment ?? "equipment"} fault` : "No open equipment faults",
       summary: ({ row }) => String(row?.summary ?? "No open equipment faults."),
@@ -94,7 +88,6 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     headline: {
       metricId: "route_runs_held_today",
       path: "totals.held",
-      scopeType: "network",
       title: ({ value }) => value ? `${value} route run${value === 1 ? "" : "s"} held today` : "No route runs held",
       summary: ({ value, result }) => value ? `${Number((result.totals as { parcelsPlanned?: number } | undefined)?.parcelsPlanned ?? 0).toLocaleString("en-IN")} parcels sit on held runs.` : "Departures are moving.",
       severity: (value) => (value > 0 ? "high" : "info"),
@@ -111,8 +104,6 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     headline: {
       metricId: "parcels_at_risk_today",
       path: "totals.atRisk",
-      denominatorPath: "totals.promisedToday",
-      scopeType: "network",
       title: ({ value }) => value ? `${value.toLocaleString("en-IN")} parcels at risk of missing today's promise` : "No parcels at risk today",
       summary: ({ value, result }) => {
         const promised = Number((result.totals as { promisedToday?: number } | undefined)?.promisedToday ?? 0);
@@ -130,8 +121,6 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     headline: {
       metricId: "locker_inbound_without_space",
       path: "rows.inboundWithoutSpace",
-      scopeType: "locker",
-      scopeIdFrom: "row:id",
       pickRow: (rows) => [...rows].sort((a, b) => Number(b.inboundWithoutSpace ?? 0) - Number(a.inboundWithoutSpace ?? 0))[0],
       title: ({ value, row }) => value ? `${row?.name ?? "Locker"}: ${value.toLocaleString("en-IN")} arrivals with no space` : "Locker sites have free space",
       summary: ({ value, row }) => value ? `${row?.districtName ?? "Area"} locker pressure for today's inbound.` : "No inbound without space.",
@@ -149,8 +138,6 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     headline: {
       metricId: "parcels_at_risk_today",
       path: "rows.atRiskToday",
-      scopeType: "shipper",
-      scopeIdFrom: "row:shipperId",
       pickRow: (rows) => {
         const miss = rows.filter((row) => row.wouldMissTarget);
         const pool = miss.length ? miss : rows;
@@ -170,7 +157,6 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     headline: {
       metricId: "complaints_open_unassigned",
       path: "totals.unassigned",
-      scopeType: "network",
       title: ({ value }) => value ? `${value} complaint${value === 1 ? "" : "s"} need an owner` : "No unassigned complaints",
       summary: ({ value }) => value ? "Open complaints with no assignee in the care queue." : "Every open complaint has an owner.",
       severity: (value) => (value > 0 ? "medium" : "info"),
