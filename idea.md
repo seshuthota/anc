@@ -1,3 +1,5 @@
+> **Scenario note (2026-10-08):** The running product scenario is now an **Indian parcel network** (hubs, parcels, lockers, shippers, complaints), not the B2B SaaS release / ARR / invoice story in this historical specification. Keep reading `idea.md` for the agent-native workspace architecture (tiny shell, orchestrator + MCP specialists, shared evidence, UI Composer with no DB access, A2UI only). Operational docs: `docs/demo-scenario.md`, `docs/architecture.md`.
+
 Yep. I’d treat this as a completely greenfield spec and deliberately avoid giving the fictional company a cute startup name. We’ll just call it **`DemoCo`** in code so the branding doesn’t contaminate the experiment.
 
 Below is the spec I’d hand to a coding agent.

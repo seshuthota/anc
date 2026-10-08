@@ -3,14 +3,14 @@ import type { PresentationInput } from "@anc/contracts";
 import { composeSurface, useComposerModel } from "./ui-composer.js";
 
 const presentation: PresentationInput = {
-  title: "Overdue invoices",
+  title: "Parcels at risk today",
   subtitle: "Records from authorized tools.",
   view: "comparison",
-  metrics: [{ id: "m1", label: "Overdue total", value: "$300,000.00", evidenceId: "ev-1" }],
-  findings: [{ id: "f1", title: "Eight invoices are overdue", body: "Each is $37,500.00.", kind: "observation", evidenceIds: ["ev-1"] }],
-  table: { id: "t", columns: ["Customer", "Amount"], rows: [{ id: "r1", cells: ["customer-001", "$37,500.00"] }], totals: ["$37,500.00"] },
-  actions: [{ id: "finance", label: "Inspect financial impact", name: "inspect_financial_impact", entities: [{ type: "customer", id: "customer-001" }] }],
-  limitations: ["Question: overdue invoices"],
+  metrics: [{ id: "m1", label: "At risk today", value: "905", evidenceId: "ev-1" }],
+  findings: [{ id: "f1", title: "Hyderabad sorter fault puts 905 parcels at risk", body: "Promised for delivery today, not yet on a truck.", kind: "observation", evidenceIds: ["ev-1"] }],
+  table: { id: "t", columns: ["Shipper", "At risk"], rows: [{ id: "r1", cells: ["Godavari Organics", "218"] }], totals: ["218"] },
+  actions: [{ id: "drill", label: "Look into Hyderabad", name: "show_as_table", entities: [{ type: "hub", id: "hub-hyd" }] }],
+  limitations: ["Question: parcels at risk"],
 };
 
 const good = [
@@ -24,8 +24,8 @@ const good = [
   { id: "finding_kind", component: "Text", text: { path: "/findings/f1/kindLabel" }, variant: "caption" },
   { id: "finding_source", component: "Button", child: "finding_source_label", variant: "borderless", action: { event: { name: "show_evidence", context: { evidenceIds: ["ev-1"] } } } },
   { id: "finding_source_label", component: "Text", text: "View evidence" },
-  { id: "next", component: "Button", child: "next_label", action: { event: { name: "inspect_financial_impact", context: { entities: [{ type: "customer", id: "someone-else" }] } } } },
-  { id: "next_label", component: "Text", text: "Inspect financial impact" },
+  { id: "next", component: "Button", child: "next_label", action: { event: { name: "show_as_table", context: { entities: [{ type: "hub", id: "someone-else" }] } } } },
+  { id: "next_label", component: "Text", text: "Look into Hyderabad" },
 ];
 
 function componentsOf(surface: Awaited<ReturnType<typeof composeSurface>>) {
@@ -36,20 +36,20 @@ describe("UI Composer", () => {
   afterEach(() => useComposerModel(undefined));
 
   it("uses the standard layout when no model is configured", async () => {
-    const surface = await composeSurface("s", presentation, { objective: "overdue invoices" });
+    const surface = await composeSurface("s", presentation, { objective: "parcels at risk" });
     expect(surface.source).toBe("template");
     expect(surface.reason).toBeUndefined();
   });
 
   it("accepts a model-authored tree and keeps runtime-built blocks and action targets", async () => {
     useComposerModel(async () => ({ components: good }));
-    const surface = await composeSurface("s", presentation, { objective: "overdue invoices" });
+    const surface = await composeSurface("s", presentation, { objective: "parcels at risk" });
     expect(surface.source).toBe("model");
     const components = componentsOf(surface);
     expect(components.find((component) => component.id === "table_block")?.component).toBe("Table");
     // The model named the action; the runtime decides which records it applies to.
     const next = components.find((component) => component.id === "next") as { action: { event: { context: { entities: Array<{ id: string }> } } } };
-    expect(next.action.event.context.entities[0]?.id).toBe("customer-001");
+    expect(next.action.event.context.entities[0]?.id).toBe("hub-hyd");
   });
 
   it("rejects figures, paths, actions and evidence the data does not contain", async () => {
@@ -65,7 +65,7 @@ describe("UI Composer", () => {
         calls += 1;
         return { components: good.map((component) => (component.id === replacement.id ? replacement : component)) };
       });
-      const surface = await composeSurface("s", presentation, { objective: "overdue invoices" });
+      const surface = await composeSurface("s", presentation, { objective: "parcels at risk" });
       expect(surface.source, label).toBe("template");
       expect(surface.reason, label).toBeTruthy();
       expect(calls, label).toBe(2);
@@ -74,10 +74,10 @@ describe("UI Composer", () => {
 
   it("rejects a tree that drops a provided block and overrules one that redefines it", async () => {
     useComposerModel(async () => ({ components: good.map((component) => (component.id === "root" ? { ...component, children: ["head", "limits"] } : component)) }));
-    expect((await composeSurface("s", presentation, { objective: "overdue invoices" })).source).toBe("template");
+    expect((await composeSurface("s", presentation, { objective: "parcels at risk" })).source).toBe("template");
     // Redefining a block does not replace it: the runtime's table is what is shown.
     useComposerModel(async () => ({ components: [...good, { id: "table_block", component: "Text", text: "no table today" }] }));
-    const overruled = await composeSurface("s", presentation, { objective: "overdue invoices" });
+    const overruled = await composeSurface("s", presentation, { objective: "parcels at risk" });
     expect(overruled.source).toBe("model");
     expect(componentsOf(overruled).find((component) => component.id === "table_block")?.component).toBe("Table");
   });
@@ -86,7 +86,7 @@ describe("UI Composer", () => {
     useComposerModel(async (_request, feedback) => ({
       components: feedback ? good : good.map((component) => (component.id === "head" ? { ...component, text: { path: "/nope" } } : component)),
     }));
-    const surface = await composeSurface("s", presentation, { objective: "overdue invoices" });
+    const surface = await composeSurface("s", presentation, { objective: "parcels at risk" });
     expect(surface.source).toBe("model");
   });
 });

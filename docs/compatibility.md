@@ -4,19 +4,19 @@ This file tracks versions proven by local smoke tests. Do not infer compatibilit
 
 | Area | Selected package/version | Status |
 | --- | --- | --- |
-| Node.js | `v24.14.0` | Available locally |
+| Node.js | `>=20.11.0` (local smoke: `v20.19.2`) | Available locally |
 | pnpm | workspace `packageManager` `pnpm@9.15.5`; local CLI may differ | Available locally |
-| CopilotKit runtime | `@copilotkit/runtime@1.73.0` | Installed. Next.js `/api/copilotkit` proxies AG-UI to the agent `/ag-ui` endpoint via `HttpAgent`. Duplicate `@ag-ui/client` types required a `as never` adapter. |
+| CopilotKit runtime | `@copilotkit/runtime@1.73.0` | Installed. Next.js `/api/copilotkit` proxies AG-UI to the agent `/ag-ui` endpoint via `HttpAgent`. Duplicate `@ag-ui/client` types required a `as never` adapter. Unused by the workspace page. |
 | AG-UI transport | Agent SSE on `POST /runtime/investigate` and `GET /runtime/events` | Workspace consumes these events directly (`RUN_STARTED`, `STEP_*`, `STATE_SNAPSHOT`, `CUSTOM` activity, `RUN_FINISHED`). `/ag-ui` remains for the unused CopilotKit proxy. |
-| A2UI renderer | A2UI protocol **v0.9** basic catalog | Composer emits `createSurface` / `updateComponents` / `updateDataModel`. CopilotKit's chat-oriented A2UI renderer is not used as the workspace host. A workspace mounting adapter in `apps/web/lib/a2ui.tsx` renders basic-catalog primitives (Column, Row, Text, Card, Button, List) plus four documented adapter extensions: `Table` (sortable, with totals and completeness note), `TextField` (edit state held in the adapter, not the model), `Checkbox` (selection), and `Chart` (SVG time series). Catalog ID: `https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json`. |
+| A2UI renderer | A2UI protocol **v0.9**; workspace catalog id `WORKSPACE_CATALOG_ID` (`https://democo.local/a2ui/catalogs/workspace/v1`) | Composer emits `createSurface` / `updateComponents` / `updateDataModel`. A workspace mounting adapter in `apps/web/lib/a2ui.tsx` renders basic-catalog primitives (Column, Row, Text, Card, Button, List, Divider) plus workspace extensions: `Table`, `EditField`, `SelectOption`, `Chart`, `Stat`, `Sequence` (see `packages/contracts/src/catalog.ts`). |
 | LangGraph | `@langchain/langgraph@1.0.1`, `@langchain/langgraph-checkpoint-sqlite` | Persistent `SqliteSaver.fromConnString(RUNTIME_DB_PATH)` compiled with the investigation graph. Restart restores checkpoints and accepted surfaces from `runtime.sqlite`. |
 | MCP SDK | `@modelcontextprotocol/client` / `server` v2 | Stdio child process owned by the agent. Concurrent specialists each open a client. |
-| SQLite driver | `better-sqlite3@12.4.1` | Company DB opened read-only; runtime DB writable. |
+| SQLite driver | `better-sqlite3@12.x` (resolved locally to `12.11.1`) | Logistics DB and runtime DB. |
 | Model adapter | Explabs OpenAI-compatible (`EXPLABS_API_KEY`, `EXPLABS_BASE_URL`, `EXPLABS_MODEL`) | Live path is `MODEL_PROVIDER=explabs` with `MODEL_EXECUTION_MODE=live-strict` by default. `live-fallback` must be set explicitly. Default demo/CI path is `MODEL_PROVIDER=fixture`. |
 
 ## Transport decision
 
-The company MCP process uses stdio and is owned by the local agent process. It accesses a deterministic SQLite file in read-only mode. Runtime state, evidence, activity, and accepted A2UI surfaces are stored in `runtime.sqlite`. LangGraph checkpoints use the same file via `SqliteSaver`.
+The logistics MCP process uses stdio and is owned by the local agent process. It accesses a deterministic SQLite file. Runtime state, evidence, activity, and accepted A2UI surfaces are stored in `runtime.sqlite`. LangGraph checkpoints use the same file via `SqliteSaver`.
 
 The public frontend is local-only. The browser streams investigation progress from the agent over SSE, and uses REST for health, saved state, evidence inspection, surface restore, and cancel. `/api/copilotkit` is not the workspace transport.
 
@@ -31,3 +31,5 @@ The set of component types the server validator accepts and the set the browser 
 - [AG-UI event concepts](https://docs.ag-ui.com/concepts/events)
 - [MCP TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/v2/)
 - [LangGraph JavaScript persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence)
+
+Pre-parcel wording for this document is preserved in [archive/pre-parcel-compatibility-2026-10-08.md](archive/pre-parcel-compatibility-2026-10-08.md).

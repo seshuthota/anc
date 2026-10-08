@@ -13,7 +13,7 @@ describe("A2UI validation", () => {
       view: "summary",
       metrics: [{ id: "errors", label: "error rate", value: "5.8%", evidenceId: "ev-1", tone: "danger" }],
       findings: [{ id: "f1", title: "Elevated errors", body: "Observed.", kind: "observation", evidenceIds: ["ev-1"] }],
-      actions: [{ id: "accounts", label: "Show affected accounts", name: "show_affected_accounts", entities: [] }],
+      actions: [{ id: "evidence", label: "View evidence", name: "show_evidence", entities: [] }],
       limitations: [],
     });
     expect(validateA2UI(messages)).toEqual([]);
@@ -124,13 +124,13 @@ describe("view-driven composition", () => {
 
   it("keeps observations, hypotheses and open questions distinguishable in the surface", () => {
     const { dataModel } = composeA2UI("surface-k", {
-      title: "Sync regression",
+      title: "Hub fault",
       subtitle: "Verified",
       view: "summary",
       metrics: [],
       findings: [
         { id: "f1", title: "Error rate up", body: "Observed.", kind: "observation", evidenceIds: ["ev-1"] },
-        { id: "f2", title: "Release caused it", body: "Unproven.", kind: "hypothesis", evidenceIds: ["ev-1"] },
+        { id: "f2", title: "Sorter fault caused it", body: "Unproven.", kind: "hypothesis", evidenceIds: ["ev-1"] },
         { id: "f3", title: "Cohort unknown", body: "Open.", kind: "unresolved_question", evidenceIds: [] },
       ],
       actions: [],

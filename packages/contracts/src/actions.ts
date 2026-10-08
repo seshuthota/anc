@@ -3,10 +3,6 @@ import { EntityRefSchema } from "./entities.js";
 
 export const ActionNameSchema = z.enum([
   "investigate",
-  "show_affected_accounts",
-  "inspect_release",
-  "inspect_account",
-  "inspect_financial_impact",
   "show_evidence",
   "retry_task",
   "show_as_table",

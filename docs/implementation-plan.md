@@ -1,3 +1,5 @@
+> **Scenario note (2026-10-08):** The running product scenario is now an **Indian parcel network**, not the earlier B2B product-release demo described in older roadmap rows below. Architecture and shell principles in this roadmap still apply. Parcel demo details: [demo-scenario.md](demo-scenario.md). Historical companion docs live under [archive/](archive/).
+
 # Agent-native enterprise workspace: implementation roadmap
 
 Updated: 2026-09-28. Status: P0–P5 local slice is in the tree. The P4 gaps found in the 2026-09-23 review (dead `view` routing, no real table, no drafts, no trend or selection controls, a validator/renderer component mismatch, and dropped clarification requests) are closed, and the evaluation harness now runs a 66-cell acceptance matrix in addition to the morning-investigation regression. Live planning asks the model for a plan and then validates it; fixture mode remains the default. Authenticated sessions use OpenID Connect when `AUTH_MODE=oidc`. Deployment controls, grant revocation, retention, backups, cost reporting, and an external read/write connector are in the tree and stay inactive until their environment is set. No production identity provider or customer system is configured in this workspace. The four-person unfamiliar-user study is still open, and the acceptance matrix has never been run against a live model. Shared employee sessions and autonomous background work stay deferred.
@@ -94,7 +96,7 @@ These are proposed names, not existing APIs. Put shared schemas in `packages/con
 | Action proposal | Capability/version, exact targets/arguments, expected record versions, effect preview, expiry, policy requirements |
 | Execution receipt | Durable operation ID, actor, operation, attempt/status, external receipt, before/after references, timestamps/errors |
 
-Do not turn every record into a narrative finding. Preserve structured data, provenance, units, freshness, pagination/completeness, and explicit limitations. Keep large evidence payloads outside repeated model/checkpoint context.
+Do not turn every record into a story finding. Preserve structured data, provenance, units, freshness, pagination/completeness, and explicit limitations. Keep large evidence payloads outside repeated model/checkpoint context.
 
 ## 5. Phased implementation backlog
 
@@ -140,7 +142,7 @@ Dependencies: P1. Estimate: 3–5 days.
 - [x] Register the existing four specialists as configuration and instructions while retaining enforced scopes.
 - [x] Select a bounded relevant capability subset for each request, rather than sending every tool to every specialist.
 - [x] Validate registry entries against connected tools and versions; expose missing capabilities honestly.
-- [x] Add one non-investigation read capability, preferably invoice aging/comparison using existing invoice data after a coverage audit.
+- [x] Add one non-investigation read capability, preferably aging-balance comparison using existing billing data after a coverage audit.
 
 **Exit gate:** the new capability works from its schema/metadata without a frontend route. Inaccessible tools are neither exposed to the model nor callable. Registry validation is tested independently.
 
@@ -152,7 +154,7 @@ Dependencies: P2. Estimate: 5–8 days.
 - [x] Replace keyword routing with structured plans using the user objective, authorized capabilities, and session context. Fixture mode scores the capability catalog and may schedule one finance follow-up after affected accounts are known. Live mode sends authorized schemas, user context, and the objective to the model, including that follow-up; the runtime validates, grants-filters, drops writes, caps tasks at three, and executes the result. Live-strict does not substitute the fixture planner. Live-fallback records the substitution.
 - [x] Validate known capabilities, permissions, input types, acyclic dependencies, artifact references, and total task/tool/time/token budgets before scheduling.
 - [x] Begin with at most three concurrent specialist tasks and bounded replanning. Runtime code owns scheduling; model text cannot create unlimited work.
-- [x] Carry selected entities, explicit periods, relevant prior artifacts, and user edits into follow-ups. Resolve “these accounts” from state.
+- [x] Keep selected entities, explicit periods, relevant prior artifacts, and user edits into follow-ups. Resolve “these customers” from state.
 - [x] Ask targeted clarification when required inputs or consequential ambiguities cannot be resolved. Return a clear limitation for unsupported tasks. A clarification is a distinct outcome: it is no longer rewritten into a permission denial, and a request the persona is not granted names the unavailable domain and the alternatives they do have.
 - [x] Preserve partial outputs, conflicting evidence, missing data, and unmet success criteria. Show concise plans/progress, not private reasoning.
 - [x] Keep deterministic plans in labeled fixture mode only; do not silently replace live planning.
@@ -176,7 +178,7 @@ Dependencies: P3; generic component preparation may begin after P2 contracts set
 
 Primary files: `composer.ts`, `a2ui-validate.ts`, `apps/web/lib/a2ui.tsx`, A2UI/artifact contracts, styles.
 
-**Exit gate:** comparison, queue/detail, and draft/form tasks produce appropriate interactive surfaces without business-specific routes. Users can select, edit, submit, revisit, and change presentation. Keyboard and narrow-screen flows work; invented data and unregistered actions fail validation.
+**Exit gate:** comparison, queue/detail, and draft/form tasks produce suitable interactive surfaces without business-specific routes. Users can select, edit, submit, revisit, and change presentation. Keyboard and compact-screen flows work; invented data and unregistered actions fail validation.
 
 ### P5 — Business actions through generated workflows
 
@@ -232,10 +234,10 @@ These are target scenarios. Audit existing data/tool coverage and implement miss
 | User/request | Work required | Useful generated interface |
 | --- | --- | --- |
 | Operations: service health and recent changes this week | Telemetry/releases with explicit period | Trend, timeline, scoped details |
-| Finance: compare overdue invoices by customer | Invoices and deterministic aging | Sortable table, totals, customer details |
+| Accounts: compare overdue balances by shipper | Billing records and deterministic aging | Sortable table, totals, customer details |
 | Support: unassigned escalations; assign one | Queue query, prepare/commit assignment | Queue, detail, assignment form, receipt |
 | COO: customer problems requiring coordination | Authorized support/operations/finance synthesis | Prioritized cross-domain summary and sources |
-| Any permitted user: “Only these accounts, last month, as a table” | Resolve prior selection; change period/view | Updated view retaining context |
+| Any permitted user: “Only these customers, last month, as a table” | Resolve prior selection; change period/view | Updated view retaining context |
 | Any user: draft customer onboarding checklist | Retrieve context; propose steps | Editable draft, explicit assumptions |
 | Restricted user: inaccessible financial information | Enforce access before model exposure | Clear limitation; permitted alternatives |
 | Any user: unavailable business operation | Detect missing capability | Honest limitation, no fabricated success |
@@ -295,7 +297,7 @@ Then deliver four local personas and isolated sessions in P1. The next product c
 | Decision | Planning default | Revisit |
 | --- | --- | --- |
 | Initial users | Four synthetic personas, private sessions | P1 before real authentication |
-| First new read | Invoice aging/comparison using seeded invoices | P2 coverage audit |
+| First new read | Aging-balance comparison using seeded billing rows | P2 coverage audit |
 | First write | Synthetic support-ticket assignment | P5 coverage audit |
 | UI approach | Existing stack, A2UI, constrained reusable catalog | P4 integration verification |
 | Agent deployment | Configurable specialists in one runtime | Only if scale/isolation requires change |

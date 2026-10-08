@@ -1,34 +1,65 @@
 # Demo scenario
 
-Fixed clock: `2026-09-20T08:00:00Z`.
+Fixed clock: Monday 21 September 2026, 07:00 IST (`2026-09-21T07:00:00.000+05:30`).
 
-Seed: `pnpm db:seed` (defaults to `sync-regression`).
+Seed: `pnpm logistics:seed` (defaults to `hub-fault`). Quiet control: `pnpm --filter @anc/logistics-db seed quiet-day` (or set the scenario argument / `LOGISTICS_DB_PATH` as needed).
 
 Opening question (paraphrases are valid):
 
 > What should I care about this morning?
 
-Expected discovery path:
+## hub-fault story
 
-1. Reliability sees an elevated sync-v2 error rate after `release-2026-09-19-3`.
-2. Product sees a synchronization usage drop versus the equal prior period.
-3. Customer sees sync_failure tickets. Tickets are corroboration, not the affected-account definition.
-4. Finance sums ARR once per telemetry-impacted account (illustrative target: 14 accounts / $2.1M ARR).
-5. Root cause remains a hypothesis.
+Overnight, sorter belt B at the Hyderabad hub fails. By morning brief time the network shows:
 
-Follow-ups from generated A2UI actions: affected accounts, release inspection, account inspection, financial impact, evidence envelopes, table view, ticket assignment.
+| Figure | Meaning |
+| --- | --- |
+| **905** | Parcels promised for delivery today that are not yet on a truck (network-wide `totals.atRisk`) |
+| **4,000** | Parcels promised for delivery today (`totals.promisedToday`) |
+| **595** | Parcels waiting to sort at Hyderabad |
+| **310** | Sorted at Hyderabad but not yet loaded |
+| **609** | Parcels on held Hyderabad route runs |
+| **296** | Parcels left behind on short-loaded runs (609 + 296 = 905 by construction; different definition) |
+| **218** | Of the 905, parcels belonging to shipper-003 (Godavari Organics) — same metric, shipper scope |
 
-Same-shell tasks (no extra routes):
+Two Chennai lockers are filling up for an unrelated reason, so not everything on the day traces back to the sorter fault. Open late complaints need owners in the care queue.
 
-- Finance: "Compare overdue invoices by customer" → sortable comparison with tool-computed totals and account selection
-- Support: "Show unassigned escalations" then assign through the generated confirmation
-- Operations: "Show me the error rate trend over the past week" → service error-rate chart from `get_service_health_series`
-- Any authorized user: "Draft an onboarding checklist for customer-001" → editable draft with explicit assumptions
-- Any authorized user: "Show only these accounts as a table" → reuses the thread's stored records
-- Unsupported: "Refund every overdue invoice by wire transfer" stops with a limitation
-- Not granted: support asking for overdue invoices, or operations asking to assign a ticket, returns a limitation naming the unavailable domain and the alternatives that persona does have
-- Unseen capability (no planner/page branch): "What open incidents should I know about?"
+Expected discovery path (specialists, not a scripted story):
+
+1. Network sees the Hyderabad equipment fault and sort backlog.
+2. Shipments sees 905 parcels at risk today and held / short-loaded runs.
+3. Last-mile sees locker inbound pressure in Chennai.
+4. Customers sees Godavari Organics' 218 at-risk parcels and any open complaints.
+
+Root cause of "belt fault caused the 905" remains a hypothesis until the Lead Analyst connects observed links.
+
+## quiet-day
+
+Same network and clock with nothing wrong. The briefing should report that nothing needs attention (once Slice 1 ranking/reconciliation lands; today's fixture path still has known flaws — see the agent-first briefing plan).
+
+## Personas
+
+| Id | Person | Role |
+| --- | --- | --- |
+| `user-coo` | Ananya Reddy | Chief Operating Officer |
+| `user-hub-hyd` | Ravi Teja Kondapalli | Hyderabad Hub Supervisor |
+| `user-lastmile` | Meenakshi Subramanian | Last-Mile Lead |
+| `user-accounts` | Arjun Mehta | Key Account Manager |
+| `user-care` | Farah Siddiqui | Customer Care Lead |
+
+## Same-shell tasks (no extra routes)
+
+- Morning briefing: "What should I care about this morning?"
+- Hub focus: "How is the Hyderabad hub doing?"
+- At-risk parcels: "Which parcels are at risk of missing today's promise?"
+- Lockers: "Which locker sites are under pressure?"
+- Shipper commitment: "Is Godavari Organics on track for its on-time commitment?"
+- Care: "Show unassigned complaints" then assign through the generated confirmation
+- Unsupported: reroute / dispatch / redeliver / refund-style writes stop with a limitation
+- Not granted: a persona asking outside their grants returns a limitation naming the unavailable domain
 
 Replay without model calls: `pnpm replay`.
-Fixture evaluation: `pnpm eval` (27 investigation runs + the 66-cell acceptance matrix).
-Live-strict evaluation: `MODEL_PROVIDER=explabs pnpm eval:live`. Explicit fallback evaluation: `pnpm eval:live-fallback`. Neither has been rerun since 2026-09-20.
+
+Evaluation: the older investigation rubric and live eval harness scripts are **not on this branch**. A parcel briefing eval is planned in Slice 6 of the agent-first briefing plan. Until then, use `pnpm test`, `pnpm test:e2e`, and `pnpm investigate`.
+
+Pre-parcel wording for this document is preserved in [archive/pre-parcel-demo-scenario-2026-10-08.md](archive/pre-parcel-demo-scenario-2026-10-08.md).
