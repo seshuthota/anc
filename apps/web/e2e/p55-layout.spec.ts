@@ -109,4 +109,60 @@ test("390px wide: no horizontal overflow on home or on the briefing", async ({ p
   expect(briefing.scroll).toBeLessThanOrEqual(briefing.width);
   expect(briefing.body).toBeLessThanOrEqual(briefing.width);
   await page.screenshot({ path: resolve(outDir, "p6-mobile-briefing.png") });
+
+  // The activity popover opens inside the viewport (it opened at x=-118 before).
+  await page.getByTestId("activity-pill").click();
+  const popover = page.getByTestId("activity-popover");
+  await expect(popover).toBeVisible();
+  const sheet = (await popover.boundingBox())!;
+  expect(sheet.x).toBeGreaterThanOrEqual(0);
+  expect(sheet.y).toBeGreaterThanOrEqual(0);
+  expect(sheet.x + sheet.width).toBeLessThanOrEqual(briefing.width);
+  expect(sheet.y + sheet.height).toBeLessThanOrEqual(844);
+  const opened = await overflow();
+  expect(opened.scroll).toBeLessThanOrEqual(opened.width);
+  await page.waitForTimeout(400); // let the pop-in animation finish before the screenshot
+  await page.screenshot({ path: resolve(outDir, "p7-mobile-popover.png") });
+  await page.keyboard.press("Escape");
+  await expect(popover).toHaveCount(0);
+});
+
+/*
+ * Chain arrows lead the hop they point to (pinned beside its first line), so a
+ * wrapped row never ends on an arrow and an arrow never sits alone; at phone
+ * width the chain is vertical. The chip stays inside its hop.
+ */
+test("cause-chain arrows stay with their hop when the row wraps, and at 390px", async ({ page }) => {
+  const outDir = resolve(__dirname, "../../../test-results");
+  await mkdir(outDir, { recursive: true });
+  for (const [width, name] of [[700, "p7-chain-wrap.png"], [390, "p7-chain-390.png"]] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    const primary = page.locator('[data-a2ui="PrimaryFinding"]');
+    await expect(primary).toHaveCount(1, { timeout: 90_000 });
+    // Settled (not the dimmed previous answer while a briefing is still running).
+    await expect(page.getByTestId("activity-pill")).toHaveText(/lookups?\b/, { timeout: 60_000 });
+    await expect(page.locator(".workspace.updating")).toHaveCount(0);
+    const hops = primary.locator(".ws-hop");
+    expect(await hops.count()).toBeGreaterThan(1);
+    const layout = await hops.evaluateAll((items) => items.map((item, index) => {
+      const after = getComputedStyle(item, "::after").content;
+      const before = getComputedStyle(item, "::before");
+      const box = item.getBoundingClientRect();
+      const tag = item.querySelector(".ws-tag")?.getBoundingClientRect();
+      return { index, after, before: before.content, position: before.position, left: box.left, right: box.right, tagInside: !tag || (tag.left >= box.left - 1 && tag.right <= box.right + 1 && tag.top >= box.top - 1 && tag.bottom <= box.bottom + 1) };
+    }));
+    for (const hop of layout) {
+      // No trailing arrow on any hop.
+      expect(["none", "normal", '""']).toContain(hop.after);
+      expect(hop.tagInside).toBe(true);
+      expect(hop.right).toBeLessThanOrEqual(width);
+      if (hop.index > 0) {
+        expect(hop.before).toMatch(/→|↓/);
+        expect(hop.position).toBe("absolute");
+      }
+    }
+    await primary.scrollIntoViewIfNeeded();
+    await primary.screenshot({ path: resolve(outDir, name) });
+  }
 });

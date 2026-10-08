@@ -408,8 +408,13 @@ button { cursor: pointer; }
 .ws-primary-definition span { color: var(--text-3); font-size: 13px; max-width: 60ch; }
 .ws-primary-why { color: var(--text-2); font-size: 15px; }
 .ws-primary-chain { border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px 0; list-style: none; margin: 0; padding: 14px 0 0; }
-.ws-hop { align-items: center; display: inline-flex; flex-wrap: wrap; font-size: 13.5px; gap: 6px; }
-.ws-hop:not(:last-child)::after { color: var(--text-3); content: "\2192"; margin: 0 10px; }
+/* Each arrow leads the hop it points to, so a wrapped row never ends on an
+   arrow and an arrow never sits alone; a hop's chip stays with its hop. */
+.ws-hop { align-items: center; display: inline-flex; flex-wrap: wrap; font-size: 13.5px; gap: 6px; max-width: 100%; }
+.ws-hop + .ws-hop { margin-left: 10px; padding-left: 20px; position: relative; }
+/* Pinned in the hop's own left padding, beside its first line: it cannot wrap away. */
+.ws-hop + .ws-hop::before { color: var(--text-3); content: "\2192"; left: 0; line-height: 1.5; position: absolute; top: 0; }
+.ws-hop .ws-tag { white-space: nowrap; }
 .ws-hop-inferred > span:first-child { color: var(--text-2); font-style: italic; }
 .ws-primary-receipts { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .ws-receipt { animation: rise-in 0.35s var(--ease); align-items: center; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-wrap: wrap; font-size: 13px; gap: 10px; padding: 8px 8px 8px 10px; }
@@ -493,4 +498,13 @@ button { cursor: pointer; }
   .home .wordmark-sub { flex-basis: 100%; font-size: 22px; text-align: center; }
   .home .connection { left: 16px; right: 16px; justify-content: flex-end; }
   .persona-select { max-width: 100%; }
+  /* The activity popover becomes a full-width sheet under the masthead, anchored
+     to the masthead rather than the pill, so it can never open off an edge. */
+  .masthead-inner { position: relative; }
+  .activity { position: static; }
+  /* On a phone the chain reads top to bottom, one hop per row. */
+  .ws-primary-chain { flex-direction: column; gap: 10px; }
+  .ws-hop + .ws-hop { margin-left: 0; }
+  .ws-hop + .ws-hop::before { content: "\2193"; }
+  .activity-popover { left: 8px; max-height: min(70vh, 560px); overflow-y: auto; right: 8px; top: calc(100% + 4px); transform-origin: top center; width: auto; }
 }
