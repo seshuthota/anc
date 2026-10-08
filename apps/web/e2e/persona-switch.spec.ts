@@ -17,7 +17,7 @@ test("switching persona mid-load drops the old briefing and starts the new one",
   const pill = page.getByTestId("activity-pill");
   const working = pill.and(page.locator('[aria-label^="Working:"]'));
   const restored = page.locator('[data-a2ui="PrimaryFinding"], [data-a2ui="ContextHeader"]').first();
-  await expect(working.or(restored)).toBeVisible({ timeout: 20_000 });
+  await expect(working.or(restored).first()).toBeVisible({ timeout: 20_000 });
   if (await restored.isVisible()) {
     // A briefing was restored: make a typed question the in-flight run.
     await expect(pill).toHaveText(/lookups?\b/, { timeout: 60_000 });
