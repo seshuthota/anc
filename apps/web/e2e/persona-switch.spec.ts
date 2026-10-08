@@ -46,3 +46,33 @@ test("switching persona mid-load drops the old briefing and starts the new one",
   await expect(page.locator('[data-a2ui="ContextHeader"]')).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Escalate |^Notify |^Assign / })).toHaveCount(0);
 });
+
+/*
+ * A reload mid-run restores the running briefing and follows it over
+ * /runtime/events; a persona switch must stop that stream too (Reviewer L2).
+ */
+test("a persona switch aborts the restored run's event stream", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("anc-principal", "user-hub-hyd"));
+  await page.goto("/");
+  const selector = page.getByLabel("Demo identity (not real sign-in)");
+  await expect(selector).toHaveValue("user-hub-hyd");
+  const pill = page.getByTestId("activity-pill");
+  const restored = page.locator('[data-a2ui="PrimaryFinding"], [data-a2ui="ContextHeader"]').first();
+  await expect(pill.and(page.locator('[aria-label^="Working:"]')).or(restored).first()).toBeVisible({ timeout: 20_000 });
+  if (await restored.isVisible()) {
+    await expect(pill).toHaveText(/lookups?\b/, { timeout: 60_000 });
+    await page.getByLabel("Workspace question").fill("Which hub has the most parcels waiting to sort?");
+    await page.getByRole("button", { name: "Ask" }).click();
+  }
+  await expect(pill).toHaveAttribute("aria-label", /^Working:/, { timeout: 20_000 });
+
+  // Reload while the run is going: the page restores it and follows its events.
+  const stream = page.waitForRequest((request) => request.url().includes("/runtime/events"), { timeout: 20_000 });
+  await page.reload();
+  const events = await stream;
+  await expect(pill).toHaveAttribute("aria-label", /^Working:/, { timeout: 20_000 });
+  const aborted = page.waitForEvent("requestfailed", { predicate: (request) => request === events, timeout: 10_000 });
+  await selector.selectOption("user-lastmile");
+  expect((await aborted).failure()?.errorText).toMatch(/ABORTED|cancel/i);
+  await expect(page.locator('[data-a2ui="PrimaryFinding"] h2')).toHaveText("3 route runs held today", { timeout: 90_000 });
+});

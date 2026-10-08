@@ -178,7 +178,9 @@ export default function HomePage() {
         showResults();
         currentRunId.current = restored.runId;
         setWorking(true);
-        const events = await fetch(`${endpoint("/runtime/events")}?threadId=${encodeURIComponent(restored.threadId)}&runId=${encodeURIComponent(restored.runId)}`, { headers, credentials });
+        // Owned like any other request: a persona switch (or a newer ask) aborts this stream.
+        const signal = newRequest();
+        const events = await fetch(`${endpoint("/runtime/events")}?threadId=${encodeURIComponent(restored.threadId)}&runId=${encodeURIComponent(restored.runId)}`, { headers, credentials, signal });
         if (events.ok) await readSse(events, (event) => applyEvent(event, restored.runId ?? undefined));
         if (currentRunId.current === restored.runId) setWorking(false);
       }
