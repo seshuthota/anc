@@ -436,7 +436,14 @@ export class RuntimeStore {
     return row ? { tool: row.tool, payload: JSON.parse(row.payload) as Record<string, unknown> } : undefined;
   }
 
-  appendAudit(input: { id: string; organizationId: string; actorId?: string | null; action: string; resource?: string | null; outcome: string; detail?: string | null; now: string }) {
+  /** The owner's evidence from the same run as `evidenceId` first, then their most recent; for naming ids in the drawer. */
+  listEvidenceNear(evidenceId: string, ownerId: string, limit = 60): Array<{ tool: string; payload: Record<string, unknown> }> {
+    const rows = this.db.prepare(`SELECT tool, payload FROM evidence WHERE owner_id = ?
+      ORDER BY (run_id = (SELECT run_id FROM evidence WHERE evidence_id = ? AND owner_id = ?)) DESC, created_at DESC LIMIT ?`).all(ownerId, evidenceId, ownerId, limit) as Array<{ tool: string; payload: string }>;
+    return rows.map((row) => ({ tool: row.tool, payload: JSON.parse(row.payload) as Record<string, unknown> }));
+  }
+
+    appendAudit(input: { id: string; organizationId: string; actorId?: string | null; action: string; resource?: string | null; outcome: string; detail?: string | null; now: string }) {
     this.db.prepare(
       `INSERT INTO audit_events (id, organization_id, actor_id, action, resource, outcome, detail, created_at)
        VALUES (@id, @organizationId, @actorId, @action, @resource, @outcome, @detail, @now)`,

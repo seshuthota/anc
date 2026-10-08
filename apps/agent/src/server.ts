@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { ORGANIZATION_ID, PRINCIPAL_HEADER, authMode, hasGrant, isDemoMode, listPersonas, resolvePrincipal, sessionThreadId, type Principal } from "@anc/policy";
 import { connectorHealth, externalReadGrant, externalWriteGrant, readExternalRecords } from "./connectors.js";
 import { listEvents, subscribeRun, type AgentEvent } from "./events.js";
-import { ExplainError, explainEvidence, openEvidence } from "./evidence-explain.js";
+import { ExplainError, explainEvidence, namesFromOwnEvidence, openEvidence } from "./evidence-explain.js";
 import { executeExternalWrite } from "./external-write.js";
 import { allowRequest, auditTokenOk, clientKey, hopPrincipal, originAllowed, sameTenant } from "./http-guard.js";
 import { recordOutcome } from "./metrics.js";
@@ -290,7 +290,7 @@ export function createAgentServer() {
         }
         if (!explain) return send(200, access.payload);
         try {
-          return send(200, explainEvidence(evidenceId, access.payload, { metricId: url.searchParams.get("metricId"), path: url.searchParams.get("path") }));
+          return send(200, explainEvidence(evidenceId, access.payload, { metricId: url.searchParams.get("metricId"), path: url.searchParams.get("path"), names: namesFromOwnEvidence(store, principal, evidenceId) }));
         } catch (error) {
           if (error instanceof ExplainError) return send(400, { error: error.message });
           throw error;
