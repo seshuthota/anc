@@ -30,7 +30,23 @@ const repeats = Math.max(1, Number(process.env.EVAL_REPEATS ?? 1));
 const workspace = mkdtempSync(join(tmpdir(), "anc-eval-briefing-"));
 process.env.RUNTIME_DB_PATH = join(workspace, "runtime.sqlite");
 
-const { openLogisticsDatabase, seedLogistics } = await import("@anc/logistics-db");
+const { openLogisticsDatabase, seedLogistics, logisticsSchemaOutdated } = await import("@anc/logistics-db");
+const { migrateCompanyDatabase } = await import("../mcp-client.js");
+/**
+ * Every company database the eval reads is seeded fresh at schema v2, and is
+ * also run through the runtime's startup migration (a no-op on a v2 seed), then
+ * checked read-only, so a specialist's read-only MCP server can never hit the
+ * "predates schema v2" refusal mid-run.
+ */
+function assertSchemaV2(path: string) {
+  migrateCompanyDatabase(path);
+  const probe = openLogisticsDatabase(path, true);
+  try {
+    if (logisticsSchemaOutdated(probe)) throw new Error(`eval:briefing: ${path} predates schema v2 after seeding and migration`);
+  } finally {
+    probe.close();
+  }
+}
 const scenarios = ["hub-fault", "quiet-day"] as const;
 type Scenario = (typeof scenarios)[number];
 const seeded: Record<Scenario, string> = { "hub-fault": "", "quiet-day": "" };
@@ -39,6 +55,7 @@ for (const scenario of scenarios) {
   const db = openLogisticsDatabase(path);
   seedLogistics(db, scenario);
   db.close();
+  assertSchemaV2(path);
   seeded[scenario] = path;
 }
 process.env.LOGISTICS_DB_PATH = seeded["hub-fault"];
@@ -241,6 +258,7 @@ const roundTrip: Check[] = [];
 {
   const copy = join(workspace, "hub-fault-roundtrip.sqlite");
   copyFileSync(seeded["hub-fault"], copy);
+  assertSchemaV2(copy);
   process.env.LOGISTICS_DB_PATH = copy;
   const coo = resolvePrincipal("user-coo");
   const threadId = "eval-roundtrip-coo";

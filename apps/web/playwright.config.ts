@@ -28,6 +28,9 @@ export default defineConfig({
   },
   webServer: [
     {
+      // Schema v2 by construction: the seed writes a brand-new file at the current
+      // schema, and agent startup runs migrateCompanyDatabase() before it listens,
+      // so no read-only specialist hits the "predates schema v2" refusal.
       command: "pnpm --filter @anc/logistics-db seed && pnpm --filter @anc/agent start",
       cwd: root,
       url: `http://127.0.0.1:${agentPort}/health`,
