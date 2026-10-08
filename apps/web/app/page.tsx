@@ -31,6 +31,18 @@ function failureLine(fixed: string, raw: unknown): string {
   const developer = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("dev") === "1";
   return developer && detail ? `${fixed} (${detail})` : fixed;
 }
+/** Phone-width screens (matches the 560px breakpoint in globals.css). */
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 560px)");
+    const update = () => setNarrow(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return narrow;
+}
 const briefedKey = (id: string) => `democo-briefed:${id}`;
 
 export default function HomePage() {
@@ -312,6 +324,7 @@ export default function HomePage() {
     if (next.status !== "running") openWorkspace(next, nextId);
   }
 
+  const narrow = useNarrow();
   const working = busy || state.status === "running";
   // Steps of the current question only, oldest first.
   const steps = useMemo(() => {
@@ -332,7 +345,8 @@ export default function HomePage() {
   ) : (
     <select className="persona-select" aria-label="Demo identity (not real sign-in)" value={principalId} onChange={(event) => void switchPrincipal(event.target.value)}>
       {(personas.length ? personas : [{ id: "user-coo", displayName: "Ananya Reddy", title: "Chief Operating Officer" }]).map((item) => (
-        <option key={item.id} value={item.id}>{item.displayName} · {item.title}</option>
+        // On a phone-width screen the name alone, so the masthead never runs off the side; the title stays in the tooltip.
+        <option key={item.id} value={item.id} title={`${item.displayName} · ${item.title}`}>{narrow ? item.displayName : `${item.displayName} · ${item.title}`}</option>
       ))}
     </select>
   );

@@ -473,11 +473,24 @@ button { cursor: pointer; }
 @media (max-width: 1100px) { .clock { display: none; } }
 @media (max-width: 820px) {
   .masthead-inner { flex-wrap: wrap; gap: 10px 12px; padding: 10px 16px; }
-  .masthead .question-form { flex-basis: 100%; max-width: none; order: 3; }
+  .masthead .question-form { flex-basis: 100%; max-width: none; min-width: 0; order: 3; }
+  .connection { flex-wrap: wrap; justify-content: flex-end; row-gap: 8px; }
   .stage { padding: 24px 16px 72px; }
   .ws-h1, .ws-h2, .pending h2 { font-size: 24px; }
   .ws-primary { padding: 20px 18px; }
   .ws-primary-value { font-size: 42px; }
   .home .wordmark { font-size: 34px; }
   .activity-popover { width: min(380px, calc(100vw - 32px)); }
+}
+/* Phone width: nothing in the masthead may run off the side. The wordmark
+   wraps ("DemoCo" over "Parcel Network"), the Ask form takes the full width,
+   and the persona shows the name only (page.tsx). */
+@media (max-width: 560px) {
+  .question-form { min-width: 0; }
+  .home .masthead-inner { gap: 22px; padding: 18vh 16px 0; }
+  .home .wordmark { flex-wrap: wrap; font-size: 30px; gap: 4px 12px; justify-content: center; white-space: normal; }
+  .home .wordmark-mark { height: 32px; width: 32px; }
+  .home .wordmark-sub { flex-basis: 100%; font-size: 22px; text-align: center; }
+  .home .connection { left: 16px; right: 16px; justify-content: flex-end; }
+  .persona-select { max-width: 100%; }
 }

@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import { agentUrl } from "./agent-url";
 
 /*
  * P5.5: no activity rail. The answer is one centred column; activity is a pill
@@ -64,4 +67,46 @@ test("no activity sidebar, a pill instead, a centred 760–880px column and an u
   }).length);
   expect(redFills).toBe(0);
   await expect(page.locator(".ws-stat")).toHaveCount(0);
+});
+
+/*
+ * P6 (Tester): at phone width (390×844) nothing runs off the side, on the home
+ * view or on the briefing: the wordmark wraps, the Ask form is full width and
+ * the persona shows the name only.
+ */
+test("390px wide: no horizontal overflow on home or on the briefing", async ({ page }) => {
+  const outDir = resolve(__dirname, "../../../test-results");
+  await mkdir(outDir, { recursive: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const overflow = () => page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, body: document.body.scrollWidth, width: window.innerWidth }));
+
+  // Home is only on screen until the auto-briefing starts, so hold the agent's
+  // replies back while it is measured.
+  const agent = new URL(agentUrl("/")).origin;
+  const held: Array<() => void> = [];
+  await page.route(`${agent}/**`, (route) => new Promise<void>((release) => held.push(() => { void route.continue().catch(() => undefined); release(); })));
+  await page.goto("/");
+  const wordmark = page.locator("h1.wordmark");
+  await expect(wordmark).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ask" })).toBeInViewport();
+  const home = await overflow();
+  expect(home.scroll).toBeLessThanOrEqual(home.width);
+  expect(home.body).toBeLessThanOrEqual(home.width);
+  const mark = (await wordmark.boundingBox())!;
+  expect(mark.x).toBeGreaterThanOrEqual(0);
+  expect(mark.x + mark.width).toBeLessThanOrEqual(home.width);
+  await page.screenshot({ path: resolve(outDir, "p6-mobile-home.png") });
+
+  await page.unroute(`${agent}/**`);
+  for (const release of held.splice(0)) release();
+  await page.reload();
+  await expect(page.locator('[data-a2ui="PrimaryFinding"]')).toHaveCount(1, { timeout: 90_000 });
+  await expect(page.getByTestId("activity-pill")).toHaveText(/lookups?\b/, { timeout: 60_000 });
+  const persona = page.getByLabel("Demo identity (not real sign-in)");
+  await expect(persona).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("button", { name: "Ask" })).toBeInViewport({ ratio: 1 });
+  const briefing = await overflow();
+  expect(briefing.scroll).toBeLessThanOrEqual(briefing.width);
+  expect(briefing.body).toBeLessThanOrEqual(briefing.width);
+  await page.screenshot({ path: resolve(outDir, "p6-mobile-briefing.png") });
 });
