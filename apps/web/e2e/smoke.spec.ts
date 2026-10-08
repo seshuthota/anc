@@ -5,6 +5,20 @@ test("labels the demo identity switcher", async ({ page }) => {
   await expect(page.getByLabel("Demo identity (not real sign-in)")).toBeVisible();
 });
 
+test("serves a favicon matching the DemoCo mark: no 404 for the tab icon", async ({ page }) => {
+  const missing: string[] = [];
+  page.on("response", (response) => { if (response.status() === 404) missing.push(response.url()); });
+  await page.goto("/");
+  const href = await page.locator('link[rel="icon"]').first().getAttribute("href");
+  expect(href).toMatch(/^\/icon\.svg/);
+  const icon = await page.request.get(href!);
+  expect(icon.status()).toBe(200);
+  expect(icon.headers()["content-type"]).toContain("image/svg+xml");
+  expect(await icon.text()).toContain("#8b8cff");
+  await page.waitForLoadState("networkidle").catch(() => undefined);
+  expect(missing.filter((url) => /favicon|icon/.test(url))).toEqual([]);
+});
+
 test("cancels the first run before a workspace is accepted", async ({ page }) => {
   await page.goto("/");
   // Auto-briefing starts on load; the wordmark becomes a button once the shell leaves home mode.
