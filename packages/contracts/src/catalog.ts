@@ -6,7 +6,8 @@
  * basic-catalog components the workspace uses. `WORKSPACE_EXTENSION_COMPONENTS`
  * are registered on top of the basic catalog in `apps/web/lib/catalog.tsx`,
  * because the basic catalog has no data table, chart, key-figure tile, ordered
- * chain, or selection that reports back to the agent.
+ * chain, selection that reports back to the agent, briefing primary-finding
+ * block, or client-only disclosure (Collapsible).
  *
  * The server validator and the UI Composer both read this list, so neither can
  * accept or author a component the browser cannot draw.
@@ -25,7 +26,9 @@ export const BASIC_CATALOG_COMPONENTS = [
 
 export const WORKSPACE_EXTENSION_COMPONENTS = [
   "Chart",
+  "Collapsible",
   "EditField",
+  "PrimaryFinding",
   "SelectOption",
   "Sequence",
   "Stat",
@@ -33,7 +36,7 @@ export const WORKSPACE_EXTENSION_COMPONENTS = [
 ] as const;
 
 /** Extensions a UI Composer may author itself. The rest are built by the runtime from tool output and only placed. */
-export const AUTHORABLE_EXTENSION_COMPONENTS = ["Sequence", "Stat"] as const;
+export const AUTHORABLE_EXTENSION_COMPONENTS = ["Collapsible", "Sequence", "Stat"] as const;
 
 export const A2UI_COMPONENT_TYPES = [
   ...BASIC_CATALOG_COMPONENTS,

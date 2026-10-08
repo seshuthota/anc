@@ -48,14 +48,30 @@ function inspectSurface(state: ReturnType<typeof publicState>) {
   const contradictionLines = state.activity
     .map((item) => item.message)
     .filter((message) => /contradict/i.test(message));
-  const hasPrimaryFinding = components.some((component) =>
-    component.component === "PrimaryFinding" || component.id === "primary_finding" || component.id === "primary_block");
+  const primaryFindings = components.filter((component) => component.component === "PrimaryFinding").length;
+  const byId = new Map(components.map((component) => [String(component.id), component]));
+  const subtree = (id: string, out = new Set<string>()): Set<string> => {
+    const component = byId.get(id) as (Component & { child?: unknown; children?: unknown }) | undefined;
+    if (!component || out.has(id)) return out;
+    out.add(id);
+    const kids = [...(Array.isArray(component.children) ? component.children.map(String) : []), ...(typeof component.child === "string" ? [component.child] : [])];
+    for (const kid of kids) subtree(kid, out);
+    return out;
+  };
+  const collapsibles = components.filter((component) => component.component === "Collapsible");
+  const inside = new Set<string>();
+  for (const collapsible of collapsibles) subtree(String(collapsible.id), inside);
+  const eventName = (component: Component) => ((component as { action?: { event?: { name?: string } } }).action?.event?.name);
+  const briefing = dataModel.briefing as { primary?: { metric?: { metricId?: string; label?: string; value?: string; definition?: string; windowLabel?: string; denominatorLabel?: string; evidenceIds?: string[]; resultPath?: string } }; secondary?: Record<string, { title?: string }>; quiet?: { label?: string } } | undefined;
   const metricsModel = dataModel.metrics && typeof dataModel.metrics === "object"
     ? Object.values(dataModel.metrics as Record<string, { metricId?: string; label?: string; value?: string; detail?: string }>)
     : [];
-  const primaryMetric = metricsModel[0]
-    ? { metricId: metricsModel[0].metricId ?? null, label: metricsModel[0].label ?? null, value: metricsModel[0].value ?? null, detail: metricsModel[0].detail ?? null }
-    : null;
+  const briefingMetric = briefing?.primary?.metric;
+  const primaryMetric = briefingMetric
+    ? { metricId: briefingMetric.metricId ?? null, label: briefingMetric.label ?? null, value: briefingMetric.value ?? null, detail: [briefingMetric.definition, briefingMetric.windowLabel, briefingMetric.denominatorLabel].filter(Boolean).join(" · "), evidenceIds: briefingMetric.evidenceIds ?? [], resultPath: briefingMetric.resultPath ?? null }
+    : metricsModel[0]
+      ? { metricId: metricsModel[0].metricId ?? null, label: metricsModel[0].label ?? null, value: metricsModel[0].value ?? null, detail: metricsModel[0].detail ?? null }
+      : null;
   return {
     title: state.surface?.title ?? null,
     status: state.status,
@@ -63,11 +79,17 @@ function inspectSurface(state: ReturnType<typeof publicState>) {
     cards: components.filter((component) => component.component === "Card").length,
     stats: components.filter((component) => component.component === "Stat").length,
     buttons: components.filter((component) => component.component === "Button").length,
+    actionButtons: components.filter((component) => component.component === "Button" && !inside.has(String(component.id)) && eventName(component) !== "show_evidence").length,
+    primaryFindings,
+    collapsibles: collapsibles.length,
+    collapsedItems: Object.keys(briefing?.secondary ?? {}).length,
+    collapsedTitles: Object.values(briefing?.secondary ?? {}).map((item) => item.title ?? ""),
+    calmLine: briefing && !briefing.primary ? briefing.quiet?.label ?? null : null,
     metricLabels,
-    headlineMetricCount: metricsModel.length,
+    headlineMetricCount: briefingMetric ? 1 : metricsModel.length,
     primaryMetric,
     contradictionActivityLines: contradictionLines,
-    hasPrimaryFinding: hasPrimaryFinding || Boolean(primaryMetric && state.surface?.title && state.surface.title !== "Nothing needs your attention this morning"),
+    hasPrimaryFinding: primaryFindings > 0,
   };
 }
 

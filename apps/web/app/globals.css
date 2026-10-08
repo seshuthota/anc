@@ -264,3 +264,23 @@ button { cursor: pointer; }
   .home .wordmark { font-size: 44px; }
   .ws-stop { padding-left: 46px; }
 }
+
+/* ---- Briefing: one primary finding, a collapsed rest ---- */
+.ws-primary { background: var(--surface); border: 1px solid var(--line); border-left: 6px solid var(--vermilion); border-radius: 12px; display: flex; flex-direction: column; gap: 16px; padding: 22px 24px; }
+.ws-primary-headline { font-size: 38px; max-width: 28ch; }
+.ws-primary-figure { align-items: baseline; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.ws-primary-value { background: none; border: 0; border-bottom: 3px dotted var(--vermilion); color: var(--vermilion); cursor: pointer; font: inherit; font-size: 56px; font-stretch: 82%; font-weight: 700; letter-spacing: -0.02em; line-height: 1; padding: 0; }
+.ws-primary-value:hover { color: #a8261e; }
+.ws-primary-definition { display: flex; flex-direction: column; gap: 2px; }
+.ws-primary-definition strong { font-size: 18px; }
+.ws-primary-definition span { color: var(--ink-soft); font-size: 14px; max-width: 64ch; }
+.ws-primary-why { font-size: 17px; }
+.ws-primary-chain { display: flex; flex-wrap: wrap; gap: 8px 0; list-style: none; margin: 0; padding: 0; }
+.ws-hop { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.ws-hop:not(:last-child)::after { color: var(--marigold-deep); content: "\2192"; font-weight: 700; margin: 0 12px; }
+.ws-hop-inferred > span:first-child { font-style: italic; }
+.ws-primary-foot { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: space-between; }
+.ws-collapsible { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 18px; }
+.ws-collapsible > summary { color: var(--ink-soft); cursor: pointer; font-weight: 600; }
+.ws-collapsible[open] > summary { margin-bottom: 12px; }
+.ws-collapsible-body .ws-row { align-items: center; }

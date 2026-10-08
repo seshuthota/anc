@@ -102,7 +102,9 @@ export const PresentationActionSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   name: z.string().min(1),
-  entities: z.array(z.object({ type: z.string(), id: z.string(), label: z.string().optional() })).default([])
+  entities: z.array(z.object({ type: z.string(), id: z.string(), label: z.string().optional() })).default([]),
+  /** For an "investigate" drill-down: the follow-up question it asks. */
+  question: z.string().min(1).optional()
 });
 
 const SynthesisPointSchema = z.object({
@@ -120,12 +122,75 @@ export const PresentationSynthesisSchema = z.object({
   separate: z.array(SynthesisPointSchema).default([])
 });
 
+const BriefingEvidenceSchema = z.array(z.string().min(1));
+
+/**
+ * The single headline figure on a briefing. Every field is copied from the
+ * reconciled metric and the metric registry; nothing here is model-authored.
+ */
+export const PresentationBriefingMetricSchema = z.object({
+  metricId: z.string().min(1),
+  /** Display value, already formatted (for example "905"). */
+  value: z.string().min(1),
+  label: z.string().min(1),
+  definition: z.string().min(1),
+  windowLabel: z.string().min(1),
+  denominatorLabel: z.string().optional(),
+  evidenceIds: BriefingEvidenceSchema.min(1),
+  resultPath: z.string().min(1)
+});
+
+export const PresentationBriefingPrimarySchema = z.object({
+  findingId: z.string().min(1),
+  headline: z.string().min(1),
+  metric: PresentationBriefingMetricSchema.optional(),
+  whyItMatters: z.string().min(1),
+  /** Cause to effect, at most three hops. An inferred hop is the analyst's link, not something a tool recorded. */
+  chain: z.array(z.object({
+    text: z.string().min(1),
+    kind: z.enum(["observed", "inferred"]),
+    evidenceIds: BriefingEvidenceSchema
+  })).max(3),
+  confidence: z.enum(["high", "medium", "low"]),
+  evidenceIds: BriefingEvidenceSchema.min(1)
+});
+
+export const PresentationBriefingSecondarySchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  evidenceIds: BriefingEvidenceSchema.min(1),
+  metricId: z.string().optional(),
+  resultPath: z.string().optional(),
+  /** The drill-down asked when the person opens this item. */
+  question: z.string().min(1)
+});
+
+/**
+ * A briefing is one primary finding, at most three lower-priority items kept
+ * collapsed, and at most three actions. `primary` is absent on a quiet day.
+ */
+export const PresentationBriefingSchema = z.object({
+  primary: PresentationBriefingPrimarySchema.optional(),
+  secondary: z.array(PresentationBriefingSecondarySchema).max(3).default([]),
+  quiet: z.object({
+    /** The calm line: on a quiet day the whole answer, otherwise the note on the collapsed rest. */
+    label: z.string().min(1),
+    /** Findings checked but neither primary nor secondary. */
+    count: z.number().int().nonnegative()
+  }),
+  /** Summary line of the collapsed secondary list ("2 lower-priority items · everything else is running to plan"). */
+  restLabel: z.string().min(1).optional(),
+  actions: z.array(PresentationActionSchema).max(3).default([])
+});
+
 export const PresentationInputSchema = z.object({
   title: z.string().min(1),
   subtitle: z.string().min(1),
   /** Drives layout. Previously computed by the planner and then ignored by the composer. */
   view: z.enum(PRESENTATION_VIEWS).default("summary"),
   synthesis: PresentationSynthesisSchema.optional(),
+  /** Present for a morning briefing: the composer then lays out exactly this plan and nothing else. */
+  briefing: PresentationBriefingSchema.optional(),
   metrics: z.array(PresentationMetricSchema).default([]),
   findings: z.array(PresentationFindingSchema).default([]),
   table: PresentationTableSchema.optional(),
@@ -154,3 +219,4 @@ export const PresentationInputSchema = z.object({
 });
 
 export type PresentationInput = z.infer<typeof PresentationInputSchema>;
+export type PresentationBriefing = z.infer<typeof PresentationBriefingSchema>;

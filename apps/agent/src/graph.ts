@@ -9,6 +9,7 @@ import { isBroadObjective, MAX_TASKS, proposePlan, validatePlan } from "./planne
 import { synthesize, type Synthesis } from "./synthesis.js";
 import { headlineMetrics, reconcileMetrics, type ReconcileResult } from "./reconcile.js";
 import { rankBriefing, type BriefingPlan } from "./rank.js";
+import { buildBriefing } from "./briefing.js";
 import { RuntimeStore } from "@anc/runtime-storage";
 import { validateA2UI } from "./a2ui-validate.js";
 import { recordSubstitution } from "./execution.js";
@@ -253,7 +254,7 @@ async function composeNode(state: typeof State.State): Promise<Partial<GraphStat
   // so an older table cannot title or pad a new answer.
   const didWork = Object.keys(state.tasks).length > 0;
   const artifacts = didWork ? current : [...current, ...listed.filter((item) => item.runId !== state.runId)];
-  const presentation = toPresentation({ intent: state.intent, objective: state.objective, findings, failedDomains, artifacts, view: state.view, clarification: state.clarification, synthesis: state.synthesis, principal: ctx.principal, reconciled: state.reconciled, briefingPlan: state.briefingPlan });
+  const presentation = toPresentation({ intent: state.intent, objective: state.objective, findings, failedDomains, artifacts, view: state.view, clarification: state.clarification, synthesis: state.synthesis, principal: ctx.principal, reconciled: state.reconciled, briefingPlan: state.briefingPlan, checkedDomains: [...new Set(Object.values(state.tasks).filter((item) => item.status !== "failed").map((item) => item.domain))] });
   const surfaceId = `surface-${state.investigationId}`;
   const revision = (state.surfaceRevision ?? 0) + 1;
   ctx.emit("UI Composer is designing the workspace", "status");
@@ -374,6 +375,8 @@ type PresentationSource = {
   principal?: Principal;
   reconciled?: ReconcileResult;
   briefingPlan?: BriefingPlan;
+  /** Specialists that completed their part, for the quiet-day "Checked:" line. */
+  checkedDomains?: Domain[];
 };
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
@@ -475,6 +478,27 @@ export function toPresentation(source: PresentationSource): PresentationInput {
     ? "The network is running to plan as far as the specialists could see."
     : (synthesis?.whyItMatters ?? plan?.primary?.whyItMatters ?? primaryFinding?.summary ?? (plan?.withheld && broad ? "The specialists found something serious, but no single figure can headline it yet." : undefined) ?? presentationFindings[0]?.body ?? "Records from the company's systems.");
   const numericColumn = rows[0]?.sortValues?.findIndex((value) => Number.isFinite(value)) ?? -1;
+
+  // A morning briefing is laid out from the briefing plan alone: one primary
+  // (with its one figure), a collapsed rest, at most three actions. No free
+  // metric tiles, no finding cards, no Sequence outside the primary block.
+  if (broad && plan && resolvedView === "summary") {
+    const briefing = buildBriefing({ plan, findings, synthesis, reconciled, checkedDomains: source.checkedDomains ?? [] });
+    return {
+      title: briefing.primary?.headline ?? (quiet ? "Nothing needs your attention this morning" : "This morning"),
+      subtitle: briefing.primary?.whyItMatters ?? briefing.quiet.label,
+      view: "summary",
+      briefing,
+      metrics: [],
+      findings: [],
+      actions: [],
+      limitations: [
+        ...unavailable,
+        ...(reconciled?.notes ?? []),
+        briefing.primary?.chain.some((hop) => hop.kind === "inferred") ? "Links marked as inferred are the analyst's reasoning across findings, not something a system recorded." : "",
+      ].filter(Boolean),
+    };
+  }
 
   return {
     title,

@@ -157,7 +157,7 @@ export const CAPABILITIES: CapabilityDefinition[] = [
     headline: {
       metricId: "complaints_open_unassigned",
       path: "totals.unassigned",
-      title: ({ value }) => value ? `${value} complaint${value === 1 ? "" : "s"} need an owner` : "No unassigned complaints",
+      title: ({ value }) => value ? `${value} complaint${value === 1 ? " needs" : "s need"} an owner` : "No unassigned complaints",
       summary: ({ value }) => value ? "Open complaints with no assignee in the care queue." : "Every open complaint has an owner.",
       severity: (value) => (value > 0 ? "medium" : "info"),
     },

@@ -12,8 +12,8 @@ import { z } from "zod";
  * Agents still author plain basic-catalog components (Text, Row, Column, Card,
  * List, Divider, Button). Their props are the standard ones; only how they are
  * drawn is ours, so the page looks like one product rather than a default
- * renderer. Table, Chart, Stat, Sequence, SelectOption and EditField are
- * extensions. `@anc/contracts/catalog` lists the same names for the server
+ * renderer. Table, Chart, Stat, Sequence, SelectOption, EditField,
+ * PrimaryFinding and Collapsible are extensions. `@anc/contracts/catalog` lists the same names for the server
  * validator and the UI Composer.
  */
 
@@ -95,6 +95,14 @@ export const workspaceDefinitions = {
       actionName: z.string().optional(),
     }),
   },
+  PrimaryFinding: {
+    description: "The briefing's one primary finding, built by the runtime: headline, one figure with its definition, window, denominator and evidence, why it matters, a cause chain of at most three hops, and confidence.",
+    props: z.object({ finding: bound(z.any()) }),
+  },
+  Collapsible: {
+    description: "A disclosure that starts closed and opens in the browser only. For lower-priority material.",
+    props: z.object({ summary: bound(z.string()), child: z.string() }),
+  },
   EditField: {
     description: "An editable text field. The edit stays in the browser until a save action sends it.",
     props: z.object({
@@ -114,6 +122,16 @@ export const ClientStateContext = createContext<{ state: { current: ClientState 
   state: { current: { fields: {}, selections: {} } },
   touch: () => undefined,
 });
+
+/** The data the runtime binds to a PrimaryFinding (see PresentationBriefingPrimarySchema). */
+type PrimaryFindingData = {
+  headline?: string;
+  whyItMatters?: string;
+  confidenceLabel?: string;
+  evidenceIds?: string[];
+  metric?: { metricId: string; value: string; label: string; definition: string; windowLabel: string; denominatorLabel?: string; evidenceIds: string[]; resultPath: string };
+  chain?: Array<{ text: string; kind: "observed" | "inferred"; kindLabel?: string; evidenceIds?: string[] }>;
+};
 
 type Row = { id?: string; cells?: unknown[]; sortValues?: unknown[]; actionName?: string; entityType?: string; entityId?: string };
 
@@ -292,6 +310,62 @@ export const workspaceCatalog = createCatalog(workspaceDefinitions, {
       </label>
     );
   },
+  PrimaryFinding: ({ props, dispatch }) => {
+    const finding = (props.finding && typeof props.finding === "object" ? props.finding : {}) as PrimaryFindingData;
+    const metric = finding.metric;
+    const evidence = (ids: string[] | undefined, extra: Record<string, unknown> = {}) => {
+      if (!ids?.length) return;
+      dispatch?.({ event: { name: "show_evidence", context: { evidenceIds: ids, ...extra } } });
+    };
+    const evidenceCount = finding.evidenceIds?.length ?? 0;
+    return (
+      <section className="ws-primary" data-a2ui="PrimaryFinding" aria-label="Primary finding">
+        <h2 className="ws-h2 ws-primary-headline">{finding.headline ?? ""}</h2>
+        {metric ? (
+          <div className="ws-primary-figure">
+            <button
+              type="button"
+              className="ws-primary-value"
+              data-metric-id={metric.metricId}
+              aria-label={`${metric.value} ${metric.label}: open its evidence`}
+              onClick={() => evidence(metric.evidenceIds, { metricId: metric.metricId, resultPath: metric.resultPath })}
+            >
+              {metric.value}
+            </button>
+            <div className="ws-primary-definition">
+              <strong>{metric.label}</strong>
+              <span>{metric.definition} · {metric.windowLabel}{metric.denominatorLabel ? ` · ${metric.denominatorLabel}` : ""}</span>
+            </div>
+          </div>
+        ) : null}
+        {finding.whyItMatters ? <p className="ws-body ws-primary-why"><strong>Why it matters: </strong>{finding.whyItMatters}</p> : null}
+        {finding.chain?.length ? (
+          <ol className="ws-primary-chain" aria-label="Cause and effect">
+            {finding.chain.map((hop, index) => (
+              <li key={index} className={`ws-hop ws-hop-${hop.kind}`}>
+                <span>{hop.text}</span>
+                <span className={`ws-tag ws-tag-${hop.kind === "observed" ? "observed" : "inferred"}`}>{hop.kindLabel ?? (hop.kind === "observed" ? "Observed" : "Inferred link, not confirmed")}</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        <div className="ws-primary-foot">
+          <span className="ws-caption">{finding.confidenceLabel ?? ""}</span>
+          {evidenceCount ? (
+            <button type="button" className="ws-button ws-button-borderless" onClick={() => evidence(finding.evidenceIds, metric ? { metricId: metric.metricId, resultPath: metric.resultPath } : {})}>
+              Evidence ({evidenceCount})
+            </button>
+          ) : null}
+        </div>
+      </section>
+    );
+  },
+  Collapsible: ({ props, children }) => (
+    <details className="ws-collapsible" data-a2ui="Collapsible">
+      <summary>{typeof props.summary === "string" ? props.summary : ""}</summary>
+      <div className="ws-collapsible-body">{props.child ? (children as Build)(props.child) : null}</div>
+    </details>
+  ),
   EditField: ({ props }) => {
     const client = useContext(ClientStateContext);
     const generated = typeof props.value === "string" ? props.value : "";

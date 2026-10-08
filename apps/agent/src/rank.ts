@@ -155,7 +155,14 @@ export function rankBriefing(input: {
   // Quiet unless something is high or critical. Medium noise (e.g. residual
   // locker pressure on an otherwise calm day) must not become the morning primary.
   if (!findings.some(serious)) {
-    return { secondary: [], quiet: true, suggestedActions: [] };
+    // A quiet day can still carry minor residue (a locker filling up). It stays
+    // secondary, collapsed under the calm line, never the primary.
+    const residual = findings
+      .filter((finding) => finding.severity !== "info" && standing.get(finding.findingId) !== "conflicted")
+      .sort((left, right) => (SEVERITY_WEIGHT[right.severity] ?? 0) - (SEVERITY_WEIGHT[left.severity] ?? 0))
+      .slice(0, 3)
+      .map((finding) => ({ findingId: finding.findingId, title: finding.title }));
+    return { secondary: residual, quiet: true, suggestedActions: [] };
   }
 
   const eligible = new Set(primaryEligibleIds(findings, reconciled));

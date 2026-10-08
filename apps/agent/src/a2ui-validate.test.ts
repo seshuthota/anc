@@ -54,6 +54,34 @@ describe("A2UI validation", () => {
     expect(unhandled).toEqual([]);
     expect(source).toContain("includeBasicCatalog: true");
   });
+
+  it("accepts a briefing surface with PrimaryFinding and Collapsible", () => {
+    const { messages } = composeA2UI("surface-brief", {
+      title: "905 parcels at risk of missing today's promise",
+      subtitle: "Why it matters.",
+      view: "summary",
+      briefing: {
+        primary: {
+          findingId: "f-at-risk",
+          headline: "905 parcels at risk of missing today's promise",
+          metric: { metricId: "parcels_at_risk_today", value: "905", label: "Parcels at risk today", definition: "Promised for delivery today, not yet on a truck", windowLabel: "Today · as of 07:00 IST", denominatorLabel: "of 4,000 parcels promised today (22.6%)", evidenceIds: ["ev-1"], resultPath: "totals.atRisk" },
+          whyItMatters: "Wave-2 runs are held.",
+          chain: [{ text: "Sorter belt B is down", kind: "observed", evidenceIds: ["ev-2"] }],
+          confidence: "high",
+          evidenceIds: ["ev-1", "ev-2"],
+        },
+        secondary: [{ id: "f-shipper", title: "Godavari Organics: 218 of the 905 parcels at risk today", evidenceIds: ["ev-3"], question: "Look into: Godavari Organics" }],
+        quiet: { label: "Everything else is running to plan.", count: 2 },
+        restLabel: "1 lower-priority item · everything else is running to plan",
+        actions: [{ id: "drill_primary", label: "Look into this", name: "investigate", entities: [], question: "What is behind this?" }],
+      },
+      metrics: [],
+      findings: [],
+      actions: [],
+      limitations: [],
+    });
+    expect(validateA2UI(messages)).toEqual([]);
+  });
 });
 
 describe("view-driven composition", () => {

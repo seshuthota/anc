@@ -28,12 +28,13 @@ describe("rankBriefing", () => {
     expect(plan.primary?.metric?.scope.type).toBe("network");
   });
 
-  it("is quiet when there is no serious finding", () => {
+  it("is quiet when there is no serious finding; residual stays secondary", () => {
     const findings = load("quiet-day");
     const reconciled = reconcileMetrics(findings);
     const plan = rankBriefing({ findings, reconciled });
     expect(plan.quiet).toBe(true);
     expect(plan.primary).toBeUndefined();
+    expect(plan.secondary.length).toBeLessThanOrEqual(3);
   });
 
   it("does not promote a conflicted metric to primary", () => {

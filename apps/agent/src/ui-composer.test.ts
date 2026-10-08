@@ -90,3 +90,110 @@ describe("UI Composer", () => {
     expect(surface.source).toBe("model");
   });
 });
+
+const briefingPresentation: PresentationInput = {
+  title: "905 parcels at risk of missing today's promise",
+  subtitle: "Records from authorized tools.",
+  view: "summary",
+  briefing: {
+    primary: {
+      findingId: "f-at-risk",
+      headline: "905 parcels at risk of missing today's promise",
+      metric: { metricId: "parcels_at_risk_today", value: "905", label: "Parcels at risk today", definition: "Promised for delivery today, not yet on a truck", windowLabel: "Today · as of 07:00 IST", denominatorLabel: "of 4,000 parcels promised today (22.6%)", evidenceIds: ["ev-1"], resultPath: "totals.atRisk" },
+      whyItMatters: "Wave-2 runs are held.",
+      chain: [{ text: "Sorter belt B is down", kind: "observed", evidenceIds: ["ev-2"] }],
+      confidence: "high",
+      evidenceIds: ["ev-1", "ev-2"],
+    },
+    secondary: [
+      { id: "f-a", title: "Hyderabad Hub has 595 parcels waiting to sort", evidenceIds: ["ev-3"], question: "Look into: backlog" },
+      { id: "f-b", title: "3 route runs held today", evidenceIds: ["ev-4"], question: "Look into: held runs" },
+    ],
+    quiet: { label: "Everything else is running to plan.", count: 1 },
+    restLabel: "2 lower-priority items · everything else is running to plan",
+    actions: [{ id: "drill_primary", label: "Look into this", name: "investigate", entities: [], question: "What is behind this?" }],
+  },
+  metrics: [],
+  findings: [],
+  actions: [],
+  limitations: ["Question: briefing"],
+};
+
+const drill = (id: string, question = "What is behind this?") => [
+  { id, component: "Button", child: `${id}_label`, action: { event: { name: "investigate", context: { question } } } },
+  { id: `${id}_label`, component: "Text", text: "Look into this" },
+];
+
+const goodBriefing: Array<Record<string, unknown>> = [
+  { id: "root", component: "Column", children: ["primary_block", "act", "rest", "limits"] },
+  { id: "act", component: "Row", children: ["drill_1"] },
+  ...drill("drill_1"),
+  { id: "rest", component: "Collapsible", summary: { path: "/briefing/restLabel" }, child: "rest_col" },
+  { id: "rest_col", component: "Column", children: ["rest_a", "rest_b"] },
+  { id: "rest_a", component: "Text", text: { path: "/briefing/secondary/f-a/title" } },
+  { id: "rest_b", component: "Text", text: { path: "/briefing/secondary/f-b/title" } },
+];
+
+describe("UI Composer briefing budget (R3/R4)", () => {
+  afterEach(() => useComposerModel(undefined));
+
+  it("accepts one primary block, one action and the rest collapsed", async () => {
+    useComposerModel(async () => ({ components: goodBriefing }));
+    const surface = await composeSurface("s", briefingPresentation, { objective: "brief me", mode: "briefing" });
+    expect(surface.reason).toBeUndefined();
+    expect(surface.source).toBe("model");
+    expect(componentsOf(surface).filter((component) => component.component === "PrimaryFinding")).toHaveLength(1);
+  });
+
+  it("rejects trees that break the budget", async () => {
+    const withRoot = (children: string[], extra: Array<Record<string, unknown>>) => [
+      { id: "root", component: "Column", children },
+      ...goodBriefing.filter((component) => component.id !== "root"),
+      ...extra,
+    ];
+    const cases: Array<[string, Array<Record<string, unknown>>]> = [
+      ["authored second PrimaryFinding", withRoot(["primary_block", "act", "rest", "limits", "p2"], [{ id: "p2", component: "PrimaryFinding", finding: { path: "/briefing/primary" } }])],
+      ["four actions", withRoot(["primary_block", "act2", "rest", "limits"], [{ id: "act2", component: "Row", children: ["d1", "d2", "d3", "d4"] }, ...drill("d1"), ...drill("d2"), ...drill("d3"), ...drill("d4")])],
+      ["free Stat", withRoot(["primary_block", "act", "rest", "limits", "st"], [{ id: "st", component: "Stat", label: "At risk", value: { path: "/briefing/primary/metric/value" } }])],
+      ["free Card", withRoot(["primary_block", "act", "rest", "limits", "cd"], [{ id: "cd", component: "Card", child: "cd_t" }, { id: "cd_t", component: "Text", text: { path: "/briefing/secondary/f-a/title" } }])],
+      ["figure without evidence", withRoot(["primary_block", "act", "rest", "limits", "qc"], [{ id: "qc", component: "Text", text: { path: "/briefing/quiet/count" } }])],
+      ["two Collapsibles", withRoot(["primary_block", "act", "rest", "rest2", "limits"], [{ id: "rest2", component: "Collapsible", summary: { path: "/briefing/restLabel" }, child: "rest2_t" }, { id: "rest2_t", component: "Text", text: { path: "/briefing/quiet/label" } }])],
+      ["secondary outside the collapsible", withRoot(["primary_block", "act", "rest", "limits", "out"], [{ id: "out", component: "Text", text: { path: "/briefing/secondary/f-a/title" } }])],
+      ["primary block dropped", withRoot(["act", "rest", "limits"], [])],
+    ];
+    const reasons: Record<string, RegExp> = {
+      "authored second PrimaryFinding": /PrimaryFinding/,
+      "four actions": /at most three actions/,
+      "free Stat": /Stat/,
+      "free Card": /finding cards/,
+      "figure without evidence": /no evidenceIds/,
+      "two Collapsibles": /at most one Collapsible/,
+      "secondary outside the collapsible": /inside the Collapsible/,
+      "primary block dropped": /primary_block|PrimaryFinding/,
+    };
+    for (const [label, components] of cases) {
+      useComposerModel(async () => ({ components }));
+      const surface = await composeSurface("s", briefingPresentation, { objective: "brief me", mode: "briefing" });
+      expect(surface.source, label).toBe("template");
+      expect(surface.reason, label).toMatch(reasons[label]!);
+    }
+  });
+
+  it("the fallback template keeps the same budget", async () => {
+    const surface = await composeSurface("s", briefingPresentation, { objective: "brief me", mode: "briefing" });
+    const components = componentsOf(surface);
+    expect(components.filter((component) => component.component === "PrimaryFinding")).toHaveLength(1);
+    expect(components.filter((component) => component.component === "Collapsible")).toHaveLength(1);
+    expect(components.filter((component) => ["Stat", "Card", "Sequence"].includes(String(component.component)))).toHaveLength(0);
+    const model = surface.messages.find((message) => "updateDataModel" in message) as { updateDataModel: { value: Record<string, unknown> } };
+    expect(model.updateDataModel.value.findings).toEqual({});
+    expect(model.updateDataModel.value.metrics).toEqual({});
+  });
+
+  it("sends the composer only the briefing plan", async () => {
+    let seen: unknown;
+    useComposerModel(async (request) => { seen = request.data; return { components: goodBriefing }; });
+    await composeSurface("s", briefingPresentation, { objective: "brief me", mode: "briefing" });
+    expect(Object.keys(seen as object).sort()).toEqual(["briefing", "title"]);
+  });
+});

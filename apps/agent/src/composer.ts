@@ -1,4 +1,4 @@
-import { A2UI_CATALOG_ID, type A2UIMessage, type PresentationInput } from "@anc/contracts";
+import { A2UI_CATALOG_ID, type A2UIMessage, type PresentationBriefing, type PresentationInput } from "@anc/contracts";
 
 type Component = Record<string, unknown>;
 
@@ -18,6 +18,7 @@ function button(id: string, label: string, variant: "primary" | "borderless", ac
  * or calls a tool: it cannot invent a capability, a number, or an action.
  */
 export function composeA2UI(surfaceId: string, presentation: PresentationInput): { messages: A2UIMessage[]; dataModel: Record<string, unknown> } {
+  if (presentation.briefing) return composeBriefing(surfaceId, presentation, presentation.briefing);
   const view = presentation.view;
   const components: Component[] = [];
   const rootChildren: string[] = ["header"];
@@ -194,7 +195,8 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       }])),
       separate: Object.fromEntries(presentation.synthesis.separate.map((item) => [item.id, { text: item.text, evidenceIds: item.evidenceIds }])),
     } : undefined,
-    metrics: Object.fromEntries(presentation.metrics.map((metric) => [metric.id, metric])),
+    // R4: every figure sits next to the evidence it was read from.
+    metrics: Object.fromEntries(presentation.metrics.map((metric) => [metric.id, { ...metric, evidenceIds: [metric.evidenceId] }])),
     findings: Object.fromEntries(presentation.findings.map((item) => [item.id, {
       ...item,
       // Surfaced in business language so an unproven cause cannot read as fact.
@@ -254,6 +256,85 @@ export function composeA2UI(surfaceId: string, presentation: PresentationInput):
       options: Object.fromEntries(presentation.selection.options.map((option) => [option.id, { label: option.label }])),
     };
   }
+
+  const messages: A2UIMessage[] = [
+    { version: "v0.9", createSurface: { surfaceId, catalogId: A2UI_CATALOG_ID } },
+    { version: "v0.9", updateComponents: { surfaceId, components } },
+    { version: "v0.9", updateDataModel: { surfaceId, path: "/", value: dataModel } },
+  ];
+  return { messages, dataModel };
+}
+
+/**
+ * The budgeted briefing layout (R3): exactly one PrimaryFinding (none on a quiet
+ * day), at most three action buttons, at most one Collapsible holding at most
+ * three secondary items, and no free Stat tiles, finding cards or Sequence.
+ * The fallback for a rejected model layout is this same layout, so the budget holds either way.
+ */
+function composeBriefing(surfaceId: string, presentation: PresentationInput, briefing: PresentationBriefing): { messages: A2UIMessage[]; dataModel: Record<string, unknown> } {
+  const components: Component[] = [];
+  const rootChildren: string[] = [];
+  const secondary = briefing.secondary.slice(0, 3);
+  const actions = briefing.actions.slice(0, 3);
+
+  if (briefing.primary) {
+    rootChildren.push("primary_block");
+    components.push({ id: "primary_block", component: "PrimaryFinding", finding: { path: "/briefing/primary" } });
+  } else {
+    rootChildren.push("header");
+    components.push({ id: "header", component: "Column", children: ["title", "calm"] });
+    components.push({ id: "title", component: "Text", text: { path: "/title" }, variant: "h2" });
+    components.push({ id: "calm", component: "Text", text: { path: "/briefing/quiet/label" } });
+  }
+
+  if (briefing.primary && actions.length) {
+    rootChildren.push("actions");
+    components.push({ id: "actions", component: "Row", children: actions.map((action) => `action_${action.id}`) });
+    for (const action of actions) {
+      const context = action.name === "investigate" ? { question: action.question ?? action.label } : { entities: action.entities };
+      components.push(...button(`action_${action.id}`, action.label, "primary", { event: { name: action.name, context } }));
+    }
+  }
+
+  if (secondary.length) {
+    rootChildren.push("rest");
+    components.push({ id: "rest", component: "Collapsible", summary: { path: "/briefing/restLabel" }, child: "rest_items" });
+    components.push({ id: "rest_items", component: "Column", children: secondary.map((item) => `rest_${item.id}`) });
+    for (const item of secondary) {
+      components.push({ id: `rest_${item.id}`, component: "Row", align: "center", justify: "spaceBetween", children: [`rest_${item.id}_title`, `rest_${item.id}_buttons`] });
+      components.push({ id: `rest_${item.id}_title`, component: "Text", text: { path: `/briefing/secondary/${item.id}/title` } });
+      components.push({ id: `rest_${item.id}_buttons`, component: "Row", children: [`rest_${item.id}_drill`, `rest_${item.id}_evidence`] });
+      components.push(...button(`rest_${item.id}_drill`, "Look into this", "borderless", { event: { name: "investigate", context: { question: item.question } } }));
+      components.push(...button(`rest_${item.id}_evidence`, "Evidence", "borderless", { event: { name: "show_evidence", context: { evidenceIds: item.evidenceIds, ...(item.metricId ? { metricId: item.metricId } : {}), ...(item.resultPath ? { resultPath: item.resultPath } : {}) } } }));
+    }
+  }
+
+  if (presentation.limitations.length) {
+    rootChildren.push("limits");
+    components.push({ id: "limits", component: "Text", text: { path: "/limitations" }, variant: "caption" });
+  }
+
+  components.unshift({ id: "root", component: "Column", children: rootChildren });
+
+  const dataModel: Record<string, unknown> = {
+    title: presentation.title,
+    subtitle: presentation.subtitle,
+    view: "summary",
+    briefing: {
+      primary: briefing.primary ? {
+        ...briefing.primary,
+        chain: briefing.primary.chain.map((hop) => ({ ...hop, kindLabel: hop.kind === "observed" ? "Observed" : "Inferred link, not confirmed" })),
+        confidenceLabel: `Confidence: ${briefing.primary.confidence[0]!.toUpperCase()}${briefing.primary.confidence.slice(1)}`,
+      } : undefined,
+      secondary: Object.fromEntries(secondary.map((item) => [item.id, item])),
+      quiet: briefing.quiet,
+      restLabel: briefing.restLabel ?? "",
+      actions,
+    },
+    metrics: {},
+    findings: {},
+    limitations: presentation.limitations.join(" "),
+  };
 
   const messages: A2UIMessage[] = [
     { version: "v0.9", createSurface: { surfaceId, catalogId: A2UI_CATALOG_ID } },

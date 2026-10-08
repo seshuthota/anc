@@ -42,6 +42,7 @@ export function useComposerModel(model: typeof composerModelOverride) {
  * from tool output, so the model places them but cannot alter them.
  */
 const BLOCKS: Record<string, string> = {
+  primary_block: "The one primary finding: headline, its one figure with definition, window, denominator and evidence, why it matters, the cause chain and confidence.",
   table_block: "The data table for this answer (sortable, with totals).",
   chart_block: "The time-series chart for this answer.",
   draft_block: "The editable draft with its save button.",
@@ -63,6 +64,7 @@ const CATALOG = `Components (A2UI v0.9, flat list; every component has a unique 
 - Button: {"child": id of a Text component, "variant"?: "primary"|"borderless"|"default", "action": {"event": {"name": string, "context"?: object}}}
 - Stat: {"label": string | {"path"}, "value": {"path"}, "tone"?: "neutral"|"alert"|"good", "note"?: string | {"path"}} — one key figure as a tile. Use "alert" for a figure that is a problem. Put several in a Row.
 - Sequence: {"children": [ids]} — draws its children as numbered stops on one connected line. Use it only for things that really are in order, such as the synthesis steps from cause to effect.
+- Collapsible: {"summary": string | {"path"}, "child": id} — a disclosure that starts closed and opens in the browser only (no round trip). For lower-priority material.
 A {"path"} value is a JSON Pointer into the data model, for example {"path": "/findings/<id>/title"}.`;
 
 const SYSTEM = `You are the UI Composer for an Indian parcel carrier's operations workspace. You design the interface for the person's current objective as an A2UI v0.9 component tree.
@@ -74,7 +76,13 @@ Rules:
 - Offer drill-downs as Buttons. Use only the listed actions, by name. For evidence use the action "show_evidence" with context {"evidenceIds": [...]} or {"evidenceId": "..."} using ids from the data.
 - Brevity is the point of this product. Never fill the page with prose: a person should grasp it in seconds and know what to do next.
 - When the data has a "synthesis", it is the lead analyst's connected account and it is the centrepiece. Show its steps in their order inside one Sequence (cause first, consequences after), each stop holding the step's text and its kindLabel so an inferred link never reads as fact. Do not repeat a finding as its own card when a step already covers it. Show each "separate" issue apart from the sequence, so it is clearly not part of it.
-- In "briefing" mode, show at most five items, the ones that matter most to this audience, most serious first. Each item is one Card: its headline (a synthesis step's text, or a finding title), one key figure if a metric supports it, its kindLabel, and exactly one Button with action "investigate" whose question asks about that specific item. Do not show finding bodies, the subtitle, or anything the audience cannot act on. Merge findings that describe the same problem into one item. Leave out low-value and housekeeping findings entirely.
+- In "briefing" mode the data holds a "briefing" plan, and the surface is one primary plus a collapsed rest:
+  - Place the "primary_block" block first when it is listed. It already shows the one figure, why it matters, the chain and confidence; do not repeat any of them.
+  - Offer the plan's actions (data.briefing.actions, at most three) as Buttons; an "investigate" action carries context {"question": <its question>}.
+  - Put the secondary items (data.briefing.secondary, at most three) inside exactly one Collapsible whose summary is bound to /briefing/restLabel. Each item is its title (bound) and one Button with action "investigate" and context {"question": <its question>}; an evidence Button is optional.
+  - With no primary_block (a quiet day, or no single headline), show /title as a heading and /briefing/quiet/label under it.
+  - Do not add Stat tiles, Cards, or a Sequence. Do not show anything else.
+- Every figure you bind must sit next to its evidence: a bound number's parent object in the data has "evidenceIds".
 - In "detail" mode, answer the one question asked: lead with the figures, show at most six findings, and show a finding's body only where the headline is not enough.
 - To let the person go deeper into a topic, use a Button with action "investigate" and context {"question": "<a short follow-up question in plain words>"}.
 - Place every listed block by adding its id to a "children" array exactly once. Do not define components with those ids.
@@ -187,12 +195,59 @@ function review(components: Component[], template: Component[], blockIds: string
     errors.push("the surface shows none of the supplied data");
   }
   if (hasCycle("root", merged)) errors.push("the component tree contains a cycle");
-  if (request.mode === "briefing") {
+  // R4: a bound figure must have its evidence next to it in the data model.
+  for (const path of shown) {
+    const value = readPointer(data, path);
+    const leaf = path.split("/").filter(Boolean).at(-1) ?? "";
+    const figure = typeof value === "number" || (leaf === "value" && typeof value === "string" && /\d/.test(value));
+    if (!figure) continue;
+    const parent = readPointer(data, path.split("/").slice(0, -1).join("/")) as { evidenceIds?: unknown } | undefined;
+    if (!Array.isArray(parent?.evidenceIds) || !parent.evidenceIds.length) errors.push(`figure ${path} has no evidenceIds next to it; bind only figures that carry their evidence`);
+  }
+  const briefingPlan = data.briefing as { primary?: unknown; secondary?: Record<string, unknown> } | undefined;
+  if (request.mode === "briefing" && briefingPlan) {
+    errors.push(...reviewBriefingBudget(merged, reachable, components, briefingPlan));
+  } else if (request.mode === "briefing") {
     const drills = components.filter((component) => reachable.has(String(component.id)) && (component.action as { event?: { name?: string } } | undefined)?.event?.name === "investigate");
     if (!drills.length) errors.push('a briefing needs an "investigate" Button on each item so the person can go deeper');
     if (components.filter((component) => reachable.has(String(component.id)) && component.component === "Card").length > 9) errors.push("a briefing is too long; merge or drop items");
   }
   return [...new Set(errors)];
+}
+
+/**
+ * R3: the briefing budget. Exactly one PrimaryFinding (none without a primary),
+ * at most three action buttons outside the collapsed rest (evidence buttons
+ * excluded), at most one Collapsible holding at most three secondary items,
+ * secondary items only inside it, and no free Stat, Card or Sequence.
+ */
+function reviewBriefingBudget(merged: Map<string, Component>, reachable: Set<string>, authored: Component[], plan: { primary?: unknown; secondary?: Record<string, unknown> }): string[] {
+  const errors: string[] = [];
+  const shownComponents = [...reachable].map((id) => merged.get(id)).filter((component): component is Component => Boolean(component));
+  const ofType = (type: string) => shownComponents.filter((component) => component.component === type);
+  const primaries = ofType("PrimaryFinding").length;
+  const expected = plan.primary ? 1 : 0;
+  if (primaries !== expected) errors.push(`a briefing shows exactly ${expected} PrimaryFinding; this tree shows ${primaries}`);
+  if (authored.some((component) => component.component === "PrimaryFinding")) errors.push("PrimaryFinding is built by the runtime; place primary_block instead of authoring one");
+  if (ofType("Stat").length) errors.push("a briefing has no free-standing Stat tiles; the primary block carries the one figure");
+  if (ofType("Card").length) errors.push("a briefing has no free-standing finding cards");
+  if (ofType("Sequence").length) errors.push("a briefing shows the chain inside the primary block only, not as a Sequence");
+  const collapsibles = ofType("Collapsible");
+  if (collapsibles.length > 1) errors.push(`a briefing has at most one Collapsible; this tree has ${collapsibles.length}`);
+  const inside = new Set<string>();
+  for (const collapsible of collapsibles) collect(String(collapsible.id), merged, inside);
+  const insideComponents = [...inside].map((id) => merged.get(id)).filter((component): component is Component => Boolean(component));
+  const secondaryIds = (components: Component[]) => new Set(paths(components).map((path) => path.match(/^\/briefing\/secondary\/([^/]+)/)?.[1]).filter((id): id is string => Boolean(id)));
+  const collapsedItems = secondaryIds(insideComponents);
+  if (collapsedItems.size > 3) errors.push(`the collapsed rest holds at most three items; this tree has ${collapsedItems.size}`);
+  const outsideSecondary = secondaryIds(shownComponents.filter((component) => !inside.has(String(component.id))));
+  if (outsideSecondary.size) errors.push("lower-priority items stay inside the Collapsible");
+  const eventOf = (component: Component) => (component.action as { event?: { name?: string } } | undefined)?.event?.name;
+  const actionButtons = shownComponents.filter((component) => component.component === "Button" && !inside.has(String(component.id)) && eventOf(component) !== "show_evidence");
+  if (actionButtons.length > 3) errors.push(`a briefing offers at most three actions; this tree has ${actionButtons.length}`);
+  const drills = insideComponents.filter((component) => component.component === "Button" && eventOf(component) === "investigate");
+  if (drills.length > 3) errors.push("the collapsed rest has at most one drill-down per item");
+  return errors;
 }
 
 async function askModel(request: ComposerModelRequest, runId: string | undefined, feedback?: string): Promise<unknown> {
@@ -237,10 +292,21 @@ export async function composeSurface(surfaceId: string, presentation: Presentati
     objective: options.objective,
     view: presentation.view,
     catalog: CATALOG,
-    data: outline({ title: data.title, subtitle: data.subtitle, synthesis: data.synthesis, metrics: data.metrics, findings: data.findings }),
+    // A briefing composer sees only the briefing plan, never the raw finding list.
+    data: presentation.briefing
+      ? outline({ title: data.title, briefing: data.briefing })
+      : outline({ title: data.title, subtitle: data.subtitle, synthesis: data.synthesis, metrics: data.metrics, findings: data.findings }),
     blocks: blockIds.map((id) => ({ id, what: BLOCKS[id]! })),
-    actions: briefing ? [] : presentation.actions.filter((action) => ActionNameSchema.safeParse(action.name).success).map((action) => ({ name: action.name, label: action.label })),
-    evidenceIds: [...new Set([...presentation.metrics.map((metric) => metric.evidenceId), ...presentation.findings.flatMap((finding) => finding.evidenceIds)])],
+    actions: presentation.briefing
+      ? presentation.briefing.actions.filter((action) => action.name !== "investigate" && ActionNameSchema.safeParse(action.name).success).map((action) => ({ name: action.name, label: action.label }))
+      : briefing ? [] : presentation.actions.filter((action) => ActionNameSchema.safeParse(action.name).success).map((action) => ({ name: action.name, label: action.label })),
+    evidenceIds: [...new Set([
+      ...presentation.metrics.map((metric) => metric.evidenceId),
+      ...presentation.findings.flatMap((finding) => finding.evidenceIds),
+      ...(presentation.briefing?.primary?.evidenceIds ?? []),
+      ...(presentation.briefing?.primary?.metric?.evidenceIds ?? []),
+      ...(presentation.briefing?.secondary.flatMap((item) => item.evidenceIds) ?? []),
+    ])],
   };
 
   let feedback: string | undefined;

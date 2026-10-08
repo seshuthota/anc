@@ -216,21 +216,21 @@ describe("a question end to end, without a model", () => {
     const started = state.activity.filter((item) => item.kind === "agent_started").map((item) => item.message).sort();
     expect(started).toEqual(["Customers Agent started", "Last-Mile Agent started", "Network Agent started", "Shipments Agent started"]);
     expect(validateA2UI(state.surface!.messages as never)).toEqual([]);
-    const findings = (state.surface!.dataModel as { findings: Record<string, { evidenceIds: string[]; title?: string }> }).findings;
-    expect(Object.keys(findings).length).toBeGreaterThanOrEqual(1);
-    expect(Object.keys(findings).length).toBeLessThanOrEqual(4);
     expect(state.surface!.title).toMatch(/at risk|905|Hyderabad|sorter|fault/i);
     expect(JSON.stringify(state.activity)).not.toMatch(/Contradictory records/i);
-    // Exactly one headline metric: parcels_at_risk_today = 905 of 4,000. No 218 anywhere among headline metrics.
-    const metrics = Object.values((state.surface!.dataModel as { metrics?: Record<string, { metricId?: string; label?: string; value?: string; detail?: string }> }).metrics ?? {});
-    expect(metrics).toHaveLength(1);
-    expect(metrics[0]).toMatchObject({ metricId: "parcels_at_risk_today", value: "905" });
-    expect(metrics[0]!.detail).toMatch(/of 4,000/);
-    expect(metrics.some((metric) => /218/.test(String(metric.value)))).toBe(false);
+    const components = ((state.surface!.messages as Array<Record<string, unknown>>).find((message) => "updateComponents" in message) as unknown as { updateComponents: { components: Array<{ component?: string; id?: string }> } }).updateComponents.components;
+    expect(components.filter((component) => component.component === "PrimaryFinding")).toHaveLength(1);
+    expect(components.filter((component) => component.component === "Stat")).toHaveLength(0);
+    expect(components.filter((component) => component.component === "Card")).toHaveLength(0);
+    expect(components.filter((component) => component.component === "Collapsible").length).toBeLessThanOrEqual(1);
+    const briefing = (state.surface!.dataModel as { briefing: { primary: { metric: { metricId: string; value: string; denominatorLabel?: string; evidenceIds: string[] }; evidenceIds: string[] }; secondary: Record<string, { title: string; evidenceIds: string[] }> } }).briefing;
+    expect(briefing.primary.metric).toMatchObject({ metricId: "parcels_at_risk_today", value: "905" });
+    expect(briefing.primary.metric.denominatorLabel).toMatch(/of 4,000/);
+    expect(Object.keys(briefing.secondary).length).toBeLessThanOrEqual(3);
+    expect(Object.values(briefing.secondary).some((item) => /218/.test(item.title) && !/of the 905/.test(item.title))).toBe(false);
     expect(state.surface!.title).not.toMatch(/218|Godavari/);
-    for (const item of Object.values(findings)) {
-      expect(item.evidenceIds.length).toBeGreaterThan(0);
-      for (const id of item.evidenceIds) expect(store.getEvidence(id, coo.id)).toBeTruthy();
+    for (const id of [...briefing.primary.evidenceIds, ...briefing.primary.metric.evidenceIds, ...Object.values(briefing.secondary).flatMap((item) => item.evidenceIds)]) {
+      expect(store.getEvidence(id, coo.id)).toBeTruthy();
     }
   }, 60_000);
 
@@ -239,12 +239,13 @@ describe("a question end to end, without a model", () => {
     const snapshots: string[] = [];
     for (let run = 0; run < 5; run += 1) {
       const state = await runInvestigation({ question: "Brief me: what needs my attention this morning?", threadId: `t-determinism-${run}`, principal: coo });
-      const model = state.surface!.dataModel as { title?: string; subtitle?: string; metrics?: object; findings?: Record<string, { title: string }> };
+      const model = state.surface!.dataModel as { title?: string; subtitle?: string; briefing?: { primary?: { findingId?: string; metric?: object }; secondary?: object } };
       snapshots.push(normalize(JSON.stringify({
         title: state.surface!.title,
         subtitle: model.subtitle,
-        metrics: model.metrics,
-        findings: Object.entries(model.findings ?? {}).map(([id, item]) => [id, item.title]),
+        primaryFindingId: model.briefing?.primary?.findingId,
+        metric: model.briefing?.primary?.metric,
+        secondary: model.briefing?.secondary,
       })));
     }
     expect(new Set(snapshots).size).toBe(1);
@@ -265,7 +266,8 @@ describe("a question end to end, without a model", () => {
     const state = await runInvestigation({ question: "Brief me: what needs my attention this morning?", threadId: "t-partial", principal: coo });
     expect(state.status).toBe("partial");
     expect(JSON.stringify(state.surface!.dataModel)).toMatch(/Customers Agent could not complete its part/);
-    expect(Object.keys((state.surface!.dataModel as { findings: object }).findings).length).toBeGreaterThan(0);
+    const failedBriefing = (state.surface!.dataModel as { briefing?: { primary?: object; secondary?: object } }).briefing;
+    expect(Boolean(failedBriefing?.primary) || Object.keys(failedBriefing?.secondary ?? {}).length > 0).toBe(true);
   }, 60_000);
 
   it("refuses a locker question from someone without last-mile access, and shows no data", async () => {
