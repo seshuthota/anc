@@ -67,10 +67,28 @@ export default function HomePage() {
   const runtimeBase = useRef(agentUrl);
   const sessionAuth = useRef(false);
   const openedFor = useRef<string | null>(null);
+  // Read synchronously by callbacks made before a re-render (a persona switch mid-run).
+  const busyRef = useRef(false);
+  // The in-flight request's stream, aborted when the person switches identity.
+  const inFlight = useRef<AbortController | null>(null);
+  // Bumped on every identity switch; a reply for an earlier switch is dropped.
+  const switchToken = useRef(0);
   // Latest activity, readable from callbacks created before it arrived.
   const activityRef = useRef<PublicState["activity"]>([]);
   activityRef.current = state.activity;
   principalRef.current = principalId;
+
+  function setWorking(value: boolean) {
+    busyRef.current = value;
+    setBusy(value);
+  }
+
+  /** A fresh abort signal for a new request; any earlier stream is dropped. */
+  function newRequest(): AbortSignal {
+    inFlight.current?.abort();
+    inFlight.current = new AbortController();
+    return inFlight.current.signal;
+  }
 
   function authHeaders(id = principalRef.current): Record<string, string> {
     return sessionAuth.current ? {} : principalHeaders(id);
@@ -94,6 +112,9 @@ export default function HomePage() {
 
   function applyEvent(event: AgentEvent, expectedRunId?: string) {
     const runId = event.runId ?? event.snapshot?.runId ?? event.result?.runId;
+    // Only the run this page is currently waiting on may change the screen: after a
+    // persona switch (or a newer question) an older stream's events are ignored.
+    if (expectedRunId && expectedRunId !== currentRunId.current) return;
     if (expectedRunId && runId && runId !== expectedRunId) return;
     if (currentRunId.current && runId && runId !== currentRunId.current) return;
     if (event.type === "RUN_ERROR") {
@@ -147,18 +168,19 @@ export default function HomePage() {
       const headers = signedInPrincipal ? {} : principalHeaders(id);
       const credentials: RequestCredentials = signedInPrincipal ? "include" : "same-origin";
       const response = await fetch(endpoint("/runtime/state"), { headers, credentials });
-      if (!response.ok || currentRunId.current) return;
+      // A persona switch while this was loading owns the screen now.
+      if (!response.ok || currentRunId.current || switchToken.current !== 0) return;
       const restored = await response.json() as PublicState;
-      if (currentRunId.current) return;
+      if (currentRunId.current || switchToken.current !== 0) return;
       setState(restored);
       if (restored.status !== "running") openWorkspace(restored, id);
       if (restored.status === "running" && restored.runId) {
         showResults();
         currentRunId.current = restored.runId;
-        setBusy(true);
+        setWorking(true);
         const events = await fetch(`${endpoint("/runtime/events")}?threadId=${encodeURIComponent(restored.threadId)}&runId=${encodeURIComponent(restored.runId)}`, { headers, credentials });
         if (events.ok) await readSse(events, (event) => applyEvent(event, restored.runId ?? undefined));
-        setBusy(false);
+        if (currentRunId.current === restored.runId) setWorking(false);
       }
     })().catch(() => undefined);
   }, []);
@@ -174,13 +196,13 @@ export default function HomePage() {
 
   async function ask(text: string, threadId = state.threadId, id = principalId, earlier = activityRef.current) {
     const trimmed = text.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || busyRef.current) return;
     const runId = `run-${crypto.randomUUID()}`;
     currentRunId.current = runId;
     setAsked(trimmed);
     setPriorSteps(new Set(earlier.map((item) => item.id)));
     showResults();
-    setBusy(true);
+    setWorking(true);
     setQuestion("");
     setState((current) => ({
       ...current,
@@ -189,7 +211,8 @@ export default function HomePage() {
       activity: [{ id: crypto.randomUUID(), message: RUN_START, kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
     }));
     try {
-      await streamRequest("/runtime/investigate", { question: trimmed, threadId, runId, principalId: id }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : id, sessionAuth.current ? { base: runtimeBase.current, credentials: "include" } : undefined);
+      const signal = newRequest();
+      await streamRequest("/runtime/investigate", { question: trimmed, threadId, runId, principalId: id }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : id, sessionAuth.current ? { base: runtimeBase.current, credentials: "include", signal } : { signal });
     } catch (error) {
       if (currentRunId.current !== runId) return;
       setState((current) => ({
@@ -198,7 +221,7 @@ export default function HomePage() {
         activity: [{ id: crypto.randomUUID(), message: failureLine(REQUEST_FAILED, error), kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
       }));
     } finally {
-      if (currentRunId.current === runId) setBusy(false);
+      if (currentRunId.current === runId) setWorking(false);
     }
   }
 
@@ -251,7 +274,8 @@ export default function HomePage() {
     }
     const runId = `run-${crypto.randomUUID()}`;
     currentRunId.current = runId;
-    setBusy(true);
+    setWorking(true);
+    const signal = newRequest();
     try {
       await streamRequest("/runtime/actions", {
         actionId: crypto.randomUUID(),
@@ -264,9 +288,9 @@ export default function HomePage() {
         entities: Array.isArray(context.entities) ? context.entities : context.entityId && context.entityType ? [{ type: context.entityType, id: context.entityId }] : [],
         parameters: context,
         principalId,
-      }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : principalId, sessionAuth.current ? { base: runtimeBase.current, credentials: "include" } : undefined);
+      }, (event) => applyEvent(event, runId), sessionAuth.current ? undefined : principalId, sessionAuth.current ? { base: runtimeBase.current, credentials: "include", signal } : { signal });
       const snapshot = (await fetch(`${endpoint("/runtime/state")}?threadId=${encodeURIComponent(state.threadId)}`, { headers: authHeaders(), credentials: sessionAuth.current ? "include" : "same-origin" }).then((response) => response.json()).catch(() => null)) as PublicState | null;
-      if (snapshot?.evidence) setEvidence({ items: [{ evidenceId: String(snapshot.evidence.evidenceId ?? "evidence"), raw: snapshot.evidence }] });
+      if (currentRunId.current === runId && snapshot?.evidence) setEvidence({ items: [{ evidenceId: String(snapshot.evidence.evidenceId ?? "evidence"), raw: snapshot.evidence }] });
     } catch (error) {
       if (currentRunId.current !== runId) return;
       setState((current) => ({
@@ -274,7 +298,7 @@ export default function HomePage() {
         activity: [{ id: crypto.randomUUID(), message: failureLine(ACTION_FAILED, error), kind: "status", timestamp: new Date().toISOString() }, ...current.activity],
       }));
     } finally {
-      if (currentRunId.current === runId) setBusy(false);
+      if (currentRunId.current === runId) setWorking(false);
     }
   }
 
@@ -308,20 +332,43 @@ export default function HomePage() {
 
   const substitutions = state.execution?.substitutions ?? [];
 
+  /**
+   * Switching identity mid-run: the old persona's in-flight briefing is stopped
+   * (its stream dropped and the run cancelled on the server), its card and
+   * buttons leave the screen at once, and the new persona's briefing starts.
+   */
   async function switchPrincipal(nextId: string) {
+    const previous = { id: principalId, threadId: state.threadId, runId: currentRunId.current ?? state.runId, running: busyRef.current || state.status === "running" };
+    const token = (switchToken.current += 1);
+    inFlight.current?.abort();
+    inFlight.current = null;
+    currentRunId.current = null;
+    setWorking(false);
     window.localStorage.setItem(PRINCIPAL_STORAGE_KEY, nextId);
+    principalRef.current = nextId;
     setPrincipalId(nextId);
     setEvidence(null);
     setAsked("");
     setPriorSteps(null);
-    currentRunId.current = null;
-    setBusy(false);
-    const response = await fetch(endpoint("/runtime/state"), { headers: authHeaders(nextId) });
-    const next = response.ok
-      ? await response.json() as PublicState
-      : { ...emptyState, threadId: nextId === "user-coo" ? "local-demo" : `session:${nextId}` };
-    setState(next);
-    if (next.status !== "running") openWorkspace(next, nextId);
+    const blank = { ...emptyState, threadId: nextId === "user-coo" ? "local-demo" : `session:${nextId}` };
+    setState(blank);
+    if (previous.running && previous.runId && previous.id !== nextId) {
+      // Best effort: the server stops the old run so it cannot land on that persona's thread later.
+      void fetch(endpoint("/runtime/cancel"), {
+        method: "POST",
+        credentials: sessionAuth.current ? "include" : "same-origin",
+        headers: { "content-type": "application/json", ...authHeaders(previous.id) },
+        body: JSON.stringify({ runId: previous.runId, threadId: previous.threadId }),
+      }).catch(() => undefined);
+    }
+    const response = await fetch(endpoint("/runtime/state"), { headers: authHeaders(nextId) }).catch(() => null);
+    if (token !== switchToken.current) return;
+    const next = response?.ok ? await response.json() as PublicState : blank;
+    if (token !== switchToken.current) return;
+    // A run still going for this persona (another tab) is not shown half-done: a fresh briefing replaces it.
+    setState(next.status === "running" ? { ...next, status: "idle", surface: next.surface } : next);
+    openedFor.current = null;
+    openWorkspace(next.status === "running" ? { ...next, surface: null } : next, nextId);
   }
 
   const narrow = useNarrow();

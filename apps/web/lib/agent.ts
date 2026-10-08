@@ -85,9 +85,10 @@ export async function readSse(response: Response, onEvent: (event: AgentEvent) =
   }
 }
 
-export async function streamRequest(path: string, body: Record<string, unknown>, onEvent: (event: AgentEvent) => void, principalId?: string, transport?: { base?: string; credentials?: RequestCredentials }): Promise<void> {
+export async function streamRequest(path: string, body: Record<string, unknown>, onEvent: (event: AgentEvent) => void, principalId?: string, transport?: { base?: string; credentials?: RequestCredentials; signal?: AbortSignal }): Promise<void> {
   const response = await fetch(`${transport?.base ?? agentUrl}${path}`, {
     method: "POST",
+    signal: transport?.signal,
     credentials: transport?.credentials ?? "same-origin",
     headers: {
       "content-type": "application/json",
