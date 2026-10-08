@@ -11,12 +11,12 @@ import { stripRuntimeMetricFields } from "./validation.js";
  * metric. A figure that matches no registry source, or two different ones, stays an
  * unbound prose figure and is not eligible as a headline.
  */
-export function bindClaimMetric(store: Pick<RuntimeStore, "getEvidence">, claim: { evidenceIds: string[]; resultPaths: string[] }, metric: Metric): Metric {
+export function bindClaimMetric(store: Pick<RuntimeStore, "getEvidence">, claim: { evidenceIds: string[]; resultPaths: string[] }, metric: Metric, ownerId?: string): Metric {
   const plain = stripRuntimeMetricFields(metric);
   if (!claim.resultPaths.length) return plain;
   const found: Array<{ binding: MetricBinding; evidenceId: string }> = [];
   for (const evidenceId of claim.evidenceIds) {
-    const evidence = store.getEvidence(evidenceId) as EvidenceLike | undefined;
+    const evidence = store.getEvidence(evidenceId, ownerId) as EvidenceLike | undefined;
     if (!evidence) continue;
     for (const path of claim.resultPaths) {
       const binding = bindRegistryMetric(evidence, path, metric.value);

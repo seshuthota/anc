@@ -6,6 +6,7 @@ import { saveCapabilityArtifacts } from "../artifacts.js";
 import { CompanyMcpClient } from "../mcp-client.js";
 import { CAPABILITIES } from "../registry.js";
 import { validateFinding } from "../validation.js";
+import { DEMO_OWNER_ID } from "@anc/policy";
 
 
 /**
@@ -135,7 +136,7 @@ export async function runFixtureSpecialist(store: RuntimeStore, task: Investigat
         limitations: [],
       });
     }
-    const checked = findings.map((item) => validateFinding(store, item));
+    const checked = findings.map((item) => validateFinding(store, item, principalId ?? DEMO_OWNER_ID));
     for (const item of checked) store.saveFinding({ findingId: item.findingId, runId, taskId: task.taskId, payload: item, now: new Date().toISOString() });
     return {
       taskId: task.taskId,

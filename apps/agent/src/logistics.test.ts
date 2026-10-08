@@ -203,6 +203,34 @@ describe("lead analyst", () => {
     expect(outcome.synthesis?.headline).not.toMatch(/902|905|218/);
   });
 
+  it("rejects a model chain hop that repeats the headline or carries its figure (A1)", async () => {
+    for (const hop of [
+      { text: "A sorter fault at Hyderabad has left 905 parcels at risk today", kind: "observed", findingIds: ["f-risk"] },
+      { text: "That leaves 905 parcels off the trucks.", kind: "inferred", findingIds: ["f-belt", "f-risk"] },
+    ]) {
+      let calls = 0;
+      useSynthesisModel(async () => { calls += 1; return { ...good, chain: [{ text: "Sorter belt B has been down since 22:10.", kind: "observed", findingIds: ["f-belt"] }, hop] }; });
+      const outcome = await brief();
+      expect(outcome.reason).toMatch(/repeats the headline or its figure/);
+      expect(calls).toBe(2);
+      // The deterministic chain stands in, and it does not repeat the headline either.
+      for (const step of outcome.synthesis?.chain ?? []) expect(step.text).not.toMatch(/\b905\b/);
+    }
+    useSynthesisModel(async () => ({ ...good, chain: [{ text: "Sorter belt B has been down since 22:10.", kind: "observed", findingIds: ["f-belt"] }] }));
+    expect((await brief()).reason).toBeUndefined();
+  });
+
+  it("gates the deterministic headline on reconciled figures and falls back to the metric label (A3)", async () => {
+    // The primary's own title carries Godavari's of-which 218: not a reconciled headline figure.
+    const noisy = findings.map((item) => (item.findingId === "f-risk" ? { ...item, title: "905 parcels at risk today, 218 of them Godavari's", summary: "218 belong to Godavari Organics." } : item));
+    const outcome = await synthesize({ objective: "brief me", audience: "COO", findings: noisy, reconciled: reconcileMetrics(noisy) });
+    expect(outcome.briefingPlan?.primary?.findingId).toBe("f-risk");
+    expect(outcome.synthesis?.headline).toBe("Parcels at risk today");
+    expect(outcome.synthesis?.whyItMatters).not.toMatch(/218/);
+    // A clean title passes the gate unchanged.
+    expect((await brief()).synthesis?.headline).toBe("905 parcels promised today are not on a truck");
+  });
+
   it("uses the rejection as feedback for the retry", async () => {
     useSynthesisModel(async (_request, feedback) => (feedback ? good : { ...good, headline: "9,999 parcels at risk" }));
     expect((await brief()).synthesis?.headline).toBe(good.headline);
@@ -251,6 +279,22 @@ describe("a question end to end, without a model", () => {
     expect(new Set(snapshots).size).toBe(1);
     expect(snapshots[0]).toMatch(/parcels_at_risk_today/);
   }, 180_000);
+
+  it("lets two people who fetch the same result each open their own evidence (A2)", async () => {
+    const { openEvidence } = await import("./evidence-explain.js");
+    const first = await runInvestigation({ question: "Brief me: what needs my attention this morning?", threadId: "t-ev-coo", principal: coo });
+    const second = await runInvestigation({ question: "Brief me: what needs my attention this morning?", threadId: "t-ev-hub", principal: hubSupervisor });
+    const idsOf = (state: typeof first) => (state.surface!.dataModel as { briefing: { primary: { evidenceIds: string[] } } }).briefing.primary.evidenceIds;
+    const shared = idsOf(first).filter((id) => idsOf(second).includes(id));
+    // Same lookup, same result, same hash id: the collision this fix is about.
+    expect(shared.length).toBeGreaterThan(0);
+    for (const id of shared) {
+      expect(store.getEvidence(id, coo.id), id).toBeTruthy();
+      expect(store.getEvidence(id, hubSupervisor.id), id).toBeTruthy();
+      expect(openEvidence(store, coo, id).status, id).toBe(200);
+      expect(openEvidence(store, hubSupervisor, id).status, id).toBe(200);
+    }
+  }, 120_000);
 
   it("builds a table from the tool's own rows for a specific question", async () => {
     const state = await runInvestigation({ question: "Which parcel lockers are full?", threadId: "t-lockers", principal: coo });

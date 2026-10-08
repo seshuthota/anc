@@ -68,7 +68,7 @@ export class CompanyMcpClient {
       throw new Error(`Tool ${tool} is not on the ${domain} allowlist`);
     }
     if (!this.client) throw new Error("MCP client is not connected");
-    const reused = this.store?.findEvidenceByToolArgs(tool, args, this.ctx?.runId);
+    const reused = this.store?.findEvidenceByToolArgs(tool, args, this.ctx?.runId, this.ctx?.principalId ?? DEMO_OWNER_ID);
     if (reused && typeof reused.evidenceId === "string") {
       return reused;
     }

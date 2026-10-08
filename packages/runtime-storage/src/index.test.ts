@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
 import { openRuntimeDatabase, RuntimeStore } from "./index.js";
 
 describe("runtime store", () => {
@@ -14,6 +15,43 @@ describe("runtime store", () => {
     expect(store.evidenceExists("ev-1")).toBe(true);
     expect(store.getEvidence("ev-1")?.evidenceId).toBe("ev-1");
     store.close();
+  });
+
+  it("keeps one evidence row per owner when two people get the same evidence id", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "anc-ev-owner-")), "runtime.sqlite");
+    const store = new RuntimeStore(openRuntimeDatabase(path));
+    const save = (ownerId: string, runId: string) => store.saveEvidence({ evidenceId: "summarize_at_risk_shipments-abc", runId, tool: "summarize_at_risk_shipments", payload: { evidenceId: "summarize_at_risk_shipments-abc", owner: ownerId }, payloadHash: "abc", now: "2026-09-21T01:30:00.000Z", ownerId });
+    save("user-coo", "run-a");
+    save("user-hub-hyd", "run-b");
+    save("user-hub-hyd", "run-c");
+    expect(store.evidenceExists("summarize_at_risk_shipments-abc", "user-coo")).toBe(true);
+    expect(store.evidenceExists("summarize_at_risk_shipments-abc", "user-hub-hyd")).toBe(true);
+    expect(store.evidenceExists("summarize_at_risk_shipments-abc", "user-care")).toBe(false);
+    expect(store.getEvidence("summarize_at_risk_shipments-abc", "user-hub-hyd")?.owner).toBe("user-hub-hyd");
+    expect(store.getEvidenceRecord("summarize_at_risk_shipments-abc", "user-coo")?.payload.owner).toBe("user-coo");
+    expect(store.getEvidenceTool("summarize_at_risk_shipments-abc", "user-hub-hyd")).toBe("summarize_at_risk_shipments");
+    expect(store.findEvidenceByToolArgs("summarize_at_risk_shipments", undefined, "run-b", "user-coo")).toBeUndefined();
+    store.close();
+  });
+
+  it("migrates a v3 evidence table (keyed by evidence id alone) to the per-owner key, keeping rows", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "anc-ev-migrate-")), "runtime.sqlite");
+    const old = new Database(path);
+    old.exec("CREATE TABLE evidence (evidence_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT, tool TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL, created_at TEXT NOT NULL)");
+    old.prepare("INSERT INTO evidence VALUES ('ev-old', 'run-1', NULL, 'get_hub_status', '{\"evidenceId\":\"ev-old\"}', 'h', '2026-09-20T08:00:00.000Z')").run();
+    old.close();
+    const db = openRuntimeDatabase(path);
+    const keyed = (db.prepare("PRAGMA table_info(evidence)").all() as Array<{ name: string; pk: number }>).filter((column) => column.pk > 0).map((column) => column.name).sort();
+    expect(keyed).toEqual(["evidence_id", "owner_id"]);
+    const store = new RuntimeStore(db);
+    expect(store.getEvidence("ev-old", "user-coo")?.evidenceId).toBe("ev-old");
+    store.saveEvidence({ evidenceId: "ev-old", runId: "run-2", tool: "get_hub_status", payload: { evidenceId: "ev-old" }, payloadHash: "h", now: "2026-09-21T08:00:00.000Z", ownerId: "user-hub-hyd" });
+    expect(store.evidenceExists("ev-old", "user-hub-hyd")).toBe(true);
+    store.close();
+    // Opening again is a no-op.
+    const again = new RuntimeStore(openRuntimeDatabase(path));
+    expect(again.evidenceExists("ev-old", "user-coo")).toBe(true);
+    again.close();
   });
 
   it("restores runtime state from a backup snapshot", async () => {

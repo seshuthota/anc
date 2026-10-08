@@ -53,12 +53,12 @@ const OUTPUT_CONTRACT = `When you have the evidence you need, reply with one JSO
 Write for a busy reader: titles under ten words, summaries one or two sentences. Name places and shippers by their names, not their ids. Write rates as percentages. Times are India Standard Time; write them as clock times (for example 22:10). Report only findings that bear on the question, at most four, and do not report on the tooling or data provenance.
 A metric is checked against the evidence: give resultPaths pointing at the exact number, and copy the value unchanged. Leave metrics out when you cannot point at the number. Tool windows are {"from", "to"} ISO timestamps. The company data is a snapshot as of "now"; treat that as the present. Use defaultWindow unless the question asks for a different period, in which case derive the window from now.`;
 
-function annotateMetrics(store: RuntimeStore, finding: AgentFinding): AgentFinding {
+function annotateMetrics(store: RuntimeStore, finding: AgentFinding, ownerId?: string): AgentFinding {
   return {
     ...finding,
     claims: finding.claims.map((claim) => ({
       ...claim,
-      metrics: claim.metrics.map((metric) => bindClaimMetric(store, claim, metric)),
+      metrics: claim.metrics.map((metric) => bindClaimMetric(store, claim, metric, ownerId)),
     })),
   };
 }
@@ -69,12 +69,12 @@ function annotateMetrics(store: RuntimeStore, finding: AgentFinding): AgentFindi
  * become a metric, but the cited observation is still worth showing. Unknown
  * evidence IDs still reject the finding.
  */
-function validated(store: RuntimeStore, finding: AgentFinding): AgentFinding {
+function validated(store: RuntimeStore, finding: AgentFinding, ownerId?: string): AgentFinding {
   try {
-    return annotateMetrics(store, validateFinding(store, finding));
+    return annotateMetrics(store, validateFinding(store, finding, ownerId), ownerId);
   } catch (error) {
     if (!(error instanceof Error) || !error.message.startsWith("Numeric claim")) throw error;
-    return annotateMetrics(store, validateFinding(store, { ...finding, claims: finding.claims.map((claim) => ({ ...claim, metrics: [], resultPaths: [] })) }));
+    return annotateMetrics(store, validateFinding(store, { ...finding, claims: finding.claims.map((claim) => ({ ...claim, metrics: [], resultPaths: [] })) }, ownerId), ownerId);
   }
 }
 
@@ -151,13 +151,13 @@ export async function runLiveSpecialist(store: RuntimeStore, task: Investigation
       const findings = [];
       for (const item of parsed.findings) {
         try {
-          findings.push(validated(store, toFinding(item, task)));
+          findings.push(validated(store, toFinding(item, task), principal.id));
         } catch {
           // drop malformed claims rather than publishing them
         }
       }
       if (!findings.length && (parsed.findings.length || parsed.problems.length)) {
-        const repaired = await repairOnce(client, config.model, messages, task, store, runId, parsed.problems);
+        const repaired = await repairOnce(client, config.model, messages, task, store, runId, parsed.problems, principal.id);
         return persist(store, runId, task, repaired);
       }
       return persist(store, runId, task, { ...parsed, findings, findingIds: findings.map((item) => item.findingId), taskId: task.taskId });
@@ -226,7 +226,7 @@ function parseResult(content: string, task: InvestigationTask) {
   return { ...empty, status, summary: typeof raw.summary === "string" ? raw.summary : "", findings, unresolvedQuestions: strings(raw.unresolvedQuestions), suggestedFollowUps: strings(raw.suggestedFollowUps), problems };
 }
 
-async function repairOnce(client: OpenAI, model: string, messages: OpenAI.Chat.ChatCompletionMessageParam[], task: InvestigationTask, store: RuntimeStore, runId: string, problems: string[]): Promise<TaskResult> {
+async function repairOnce(client: OpenAI, model: string, messages: OpenAI.Chat.ChatCompletionMessageParam[], task: InvestigationTask, store: RuntimeStore, runId: string, problems: string[], ownerId: string): Promise<TaskResult> {
   const reason = problems.length
     ? `Your reply could not be read:\n${problems.slice(0, 6).join("\n")}\nResend the complete JSON object in exactly the required shape.`
     : "Your findings were rejected because evidence IDs or numeric claims did not validate. Resend the JSON object using only evidence IDs returned by tools, and drop any metric you cannot point at with resultPaths.";
@@ -236,7 +236,7 @@ async function repairOnce(client: OpenAI, model: string, messages: OpenAI.Chat.C
   const parsed = parseResult(response.choices[0]?.message?.content ?? "{}", task);
   const findings = parsed.findings.flatMap((item) => {
     try {
-      return [validated(store, toFinding(item, task))];
+      return [validated(store, toFinding(item, task), ownerId)];
     } catch {
       return [];
     }

@@ -208,6 +208,13 @@ function review(components: Component[], template: Component[], blockIds: string
   if (request.mode === "briefing" && briefingPlan) {
     errors.push(...reviewBriefingBudget(merged, reachable, components, briefingPlan));
   } else if (request.mode === "briefing") {
+    // Briefing mode without a briefing plan. The graph asks for "briefing" mode
+    // for any broad objective, but toPresentation only builds a plan for the
+    // summary view; a broad question routed to another view (a table toggle, a
+    // form step, a clarification, an unsupported refusal) or a legacy caller of
+    // composeSurface arrives here with the older finding-list data. There is no
+    // R3 plan to hold it to, so the looser legacy checks apply: every item needs a
+    // drill-down, and the surface may not run past nine cards.
     const drills = components.filter((component) => reachable.has(String(component.id)) && (component.action as { event?: { name?: string } } | undefined)?.event?.name === "investigate");
     if (!drills.length) errors.push('a briefing needs an "investigate" Button on each item so the person can go deeper');
     if (components.filter((component) => reachable.has(String(component.id)) && component.component === "Card").length > 9) errors.push("a briefing is too long; merge or drop items");
@@ -221,7 +228,7 @@ function review(components: Component[], template: Component[], blockIds: string
  * excluded), at most one Collapsible holding at most three secondary items,
  * secondary items only inside it, and no free Stat, Card or Sequence.
  */
-function reviewBriefingBudget(merged: Map<string, Component>, reachable: Set<string>, authored: Component[], plan: { primary?: unknown; secondary?: Record<string, unknown> }): string[] {
+export function reviewBriefingBudget(merged: Map<string, Component>, reachable: Set<string>, authored: Component[], plan: { primary?: unknown; secondary?: Record<string, unknown> }): string[] {
   const errors: string[] = [];
   const shownComponents = [...reachable].map((id) => merged.get(id)).filter((component): component is Component => Boolean(component));
   const ofType = (type: string) => shownComponents.filter((component) => component.component === type);

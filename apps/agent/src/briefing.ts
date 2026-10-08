@@ -1,5 +1,5 @@
 import { getMetricDefinition, type AgentFinding, type Domain, type PresentationBriefing } from "@anc/contracts";
-import type { BriefingPlan } from "./rank.js";
+import { chainHopRepeatsHeadline, type BriefingPlan } from "./rank.js";
 import type { ReconcileResult, ReconciledMetric } from "./reconcile.js";
 import type { Synthesis } from "./synthesis.js";
 import { DEMO_CLOCK } from "./windows.js";
@@ -78,11 +78,14 @@ export function buildBriefing(input: {
   if (plan.primary && primaryFinding) {
     const metric = plan.primary.metric;
     const chainSource = analyst?.chain?.length ? analyst.chain : plan.primary.chain;
-    const chain = chainSource.slice(0, 3).map((hop) => ({ text: hop.text, kind: hop.kind, evidenceIds: evidenceOf(findings, hop.findingIds) }));
+    const headline = analyst?.headline ?? primaryFinding.title;
+    // Chain rule, enforced again where the composer's data is built: no hop repeats
+    // the headline or carries its figure, whoever wrote the chain.
+    const chain = chainSource.filter((hop) => !chainHopRepeatsHeadline(hop.text, { text: headline, figure: metric?.value })).slice(0, 3).map((hop) => ({ text: hop.text, kind: hop.kind, evidenceIds: evidenceOf(findings, hop.findingIds) }));
     const evidenceIds = [...new Set([...(metric?.evidenceIds ?? []), ...evidenceOf(findings, [primaryFinding.findingId]), ...chain.flatMap((hop) => hop.evidenceIds)])];
     primary = {
       findingId: primaryFinding.findingId,
-      headline: analyst?.headline ?? primaryFinding.title,
+      headline,
       metric: metric ? {
         metricId: metric.metricId,
         value: formatMetricValue(metric),

@@ -1,7 +1,7 @@
 import type { AgentFinding } from "@anc/contracts";
 import OpenAI from "openai";
 import type { BriefingPlan } from "./rank.js";
-import { rankBriefing, reviewLeadAnalystRanking } from "./rank.js";
+import { rankBriefing, reviewChain, reviewLeadAnalystRanking } from "./rank.js";
 import { headlineMetrics, type ReconcileResult } from "./reconcile.js";
 import { resolveExecutionMode, resolveModelConfig } from "./provider.js";
 import { specialistLabel } from "./registry.js";
@@ -87,7 +87,7 @@ const SYSTEM = `You are the lead analyst at an Indian parcel carrier. Specialist
 
 Reply with one JSON object including headline, primaryFindingId, secondaryFindingIds, whyItMatters, confidence, chain, steps, separate.`;
 
-function review(reply: unknown, request: SynthesisRequest, gate: FigureGate): { synthesis?: Synthesis; errors: string[] } {
+function review(reply: unknown, request: SynthesisRequest, gate: FigureGate, primaryFigure?: number): { synthesis?: Synthesis; errors: string[] } {
   const errors: string[] = [];
   const value = (reply ?? {}) as {
     headline?: unknown; steps?: unknown; separate?: unknown;
@@ -143,6 +143,8 @@ function review(reply: unknown, request: SynthesisRequest, gate: FigureGate): { 
   if (whyItMatters) reconciledFigures(whyItMatters, "whyItMatters");
   if (Array.isArray(value.chain) && value.chain.length > 3) errors.push("at most three chain hops");
   const chain = entries(value.chain, "chain", true).slice(0, 3).map(({ text, kind, findingIds }) => ({ text, kind, findingIds }));
+  // The chain starts at the first cause: no hop may repeat the headline or carry its figure.
+  if (headline) errors.push(...reviewChain(chain, { text: headline, figure: primaryFigure }));
   if (primaryFindingId && !known.has(primaryFindingId)) errors.push(`primaryFindingId ${primaryFindingId} is unknown`);
   if (request.primaryFindingId && primaryFindingId !== request.primaryFindingId) {
     errors.push(`primaryFindingId must be ${request.primaryFindingId}, the ranked primary${primaryFindingId ? `, not ${primaryFindingId}` : ""}`);
@@ -173,17 +175,38 @@ async function askModel(request: SynthesisRequest, runId: string | undefined, fe
   return JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] ?? content);
 }
 
-function planToSynthesis(plan: BriefingPlan, findings: AgentFinding[]): Synthesis | undefined {
+/**
+ * True when every figure in the text (clock times aside) is in the reconciled set.
+ * The same gate the Lead Analyst's headline passes; the deterministic stand-in is held to it too.
+ */
+function onlyReconciledFigures(text: string, gate: FigureGate): boolean {
+  const tokens = text.match(/\d[\d,.:]*\d|\d/g) ?? [];
+  return tokens.every((figure) => figure.includes(":") || gate.allowed.has(normalizeFigure(figure)));
+}
+
+/**
+ * The deterministic stand-in for the Lead Analyst. The headline is the primary
+ * finding's title only when its figures pass the reconciled-figure gate; a title
+ * carrying any other figure (an of-which part, a conflicted value, a model's free
+ * figure) falls back to the reconciled metric's registry label, which has none.
+ */
+function planToSynthesis(plan: BriefingPlan, findings: AgentFinding[], reconciled: ReconcileResult): Synthesis | undefined {
   if (plan.quiet || !plan.primary) return undefined;
   const primary = findings.find((finding) => finding.findingId === plan.primary!.findingId);
   if (!primary) return undefined;
+  const gate = figureGate(reconciled);
+  const fallback = plan.primary.metric?.label ?? primary.title.replace(/\s*\d[\d,.]*\s*/g, " ").replace(/\s+/g, " ").trim();
+  const headline = onlyReconciledFigures(primary.title, gate) ? primary.title : fallback;
+  const whyItMatters = onlyReconciledFigures(plan.primary.whyItMatters, gate)
+    ? plan.primary.whyItMatters
+    : plan.primary.metric?.definition ?? plan.primary.whyItMatters.replace(/\s*\d[\d,.]*%?\s*/g, " ").replace(/\s+/g, " ").trim();
   return {
-    headline: primary.title,
+    headline,
     steps: plan.primary.chain.map((step, index) => ({ id: `step-${index + 1}`, text: step.text, kind: step.kind, findingIds: step.findingIds })),
     separate: plan.secondary.map((item, index) => ({ id: `separate-${index + 1}`, text: item.title, findingIds: [item.findingId] })),
     primaryFindingId: plan.primary.findingId,
     secondaryFindingIds: plan.secondary.map((item) => item.findingId),
-    whyItMatters: plan.primary.whyItMatters,
+    whyItMatters,
     confidence: plan.primary.confidence,
     chain: plan.primary.chain,
   };
@@ -207,10 +230,10 @@ export async function synthesize(input: {
   // Nothing qualifies to lead (a quiet day, or a withheld headline): there is no
   // primary for the Lead Analyst to describe, so no model headline is asked for.
   if (input.findings.length < 2 || !ranked.primary) {
-    return { briefingPlan: ranked, synthesis: planToSynthesis(ranked, input.findings) };
+    return { briefingPlan: ranked, synthesis: planToSynthesis(ranked, input.findings, reconciled) };
   }
   if (resolveExecutionMode() === "fixture" && !synthesisModelOverride) {
-    return { briefingPlan: ranked, synthesis: planToSynthesis(ranked, input.findings) };
+    return { briefingPlan: ranked, synthesis: planToSynthesis(ranked, input.findings, reconciled) };
   }
 
   const gate = figureGate(reconciled);
@@ -239,7 +262,7 @@ export async function synthesize(input: {
   let reason = "";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const checked = review(await askModel(request, input.runId, feedback), request, gate);
+      const checked = review(await askModel(request, input.runId, feedback), request, gate, ranked.primary.metric?.value);
       if (checked.synthesis) {
         const rankingErrors = reviewLeadAnalystRanking({
           primaryFindingId: checked.synthesis.primaryFindingId,
@@ -263,5 +286,5 @@ export async function synthesize(input: {
     }
   }
   // Model rejected: substitute the deterministic ranker.
-  return { briefingPlan: ranked, synthesis: planToSynthesis(ranked, input.findings), reason: reason || "lead analyst ranking rejected; using deterministic ranker" };
+  return { briefingPlan: ranked, synthesis: planToSynthesis(ranked, input.findings, reconciled), reason: reason || "lead analyst ranking rejected; using deterministic ranker" };
 }

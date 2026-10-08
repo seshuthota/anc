@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { AgentFinding } from "@anc/contracts";
 import { PERSONAS } from "@anc/policy";
-import { rankBriefing, reviewLeadAnalystRanking } from "./rank.js";
+import { chainHopRepeatsHeadline, figureTokens, rankBriefing, reviewChain, reviewLeadAnalystRanking } from "./rank.js";
 import { reconcileMetrics } from "./reconcile.js";
 
 function load(name: string): AgentFinding[] {
@@ -85,6 +85,38 @@ describe("rankBriefing after P1 review", () => {
     expect(reviewLeadAnalystRanking({ primaryFindingId: "f-at-risk", findings, reconciled })).toEqual([]);
     expect(reviewLeadAnalystRanking({ primaryFindingId: "f-shipper", findings, reconciled })[0]).toMatch(/differs from the ranked primary f-at-risk/);
     expect(reviewLeadAnalystRanking({ findings, reconciled })[0]).toMatch(/required/);
+  });
+});
+
+describe("cause chain (P4 quick fix A1)", () => {
+  it("starts at the first cause and never repeats the headline or its figure", () => {
+    const findings = load("hub-fault-findings");
+    const plan = rankBriefing({ findings, reconciled: reconcileMetrics(findings) });
+    const primary = findings.find((finding) => finding.findingId === plan.primary?.findingId)!;
+    const chain = plan.primary!.chain;
+    expect(chain.length).toBeGreaterThan(0);
+    expect(chain.length).toBeLessThanOrEqual(3);
+    expect(chain[0]!.findingIds).toEqual(["f-equipment"]);
+    expect(chain.flatMap((hop) => hop.findingIds)).not.toContain(primary.findingId);
+    for (const hop of chain) {
+      expect(hop.text).not.toBe(primary.title);
+      expect(figureTokens(hop.text)).not.toContain(String(plan.primary!.metric!.value));
+      expect(chainHopRepeatsHeadline(hop.text, { text: primary.title, figure: plan.primary!.metric!.value })).toBe(false);
+    }
+  });
+
+  it("flags a hop that equals the headline, contains it, or carries the headline figure in any form", () => {
+    const headline = { text: "905 parcels at risk of missing today's promise", figure: 905 };
+    expect(chainHopRepeatsHeadline("905 parcels at risk of missing today's promise", headline)).toBe(true);
+    expect(chainHopRepeatsHeadline("So: 905 parcels at risk of missing today's promise.", headline)).toBe(true);
+    expect(chainHopRepeatsHeadline("That leaves 905 parcels off the trucks", headline)).toBe(true);
+    expect(chainHopRepeatsHeadline("That leaves 905.0 parcels off the trucks", headline)).toBe(true);
+    expect(chainHopRepeatsHeadline("Network total 4,000", { text: "x", figure: 4000 })).toBe(true);
+    expect(chainHopRepeatsHeadline("Sorter belt B down since 22:10", headline)).toBe(false);
+    expect(chainHopRepeatsHeadline("3 route runs held today", headline)).toBe(false);
+    expect(reviewChain([{ text: "Sorter belt B is down" }, { text: "So 905 parcels miss today" }], headline)).toEqual([
+      expect.stringMatching(/chain 2 repeats the headline or its figure \(905\)/),
+    ]);
   });
 });
 

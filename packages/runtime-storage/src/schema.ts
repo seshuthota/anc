@@ -1,4 +1,4 @@
-export const RUNTIME_SCHEMA_VERSION = 3;
+export const RUNTIME_SCHEMA_VERSION = 4;
 
 export const runtimeSchemaSql = /* sql */ `
 PRAGMA foreign_keys = ON;
@@ -36,14 +36,18 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+-- Keyed by (evidence_id, owner_id): an evidence id is a hash of the tool result,
+-- so two people who run the same lookup get the same id and each keeps a row.
 CREATE TABLE IF NOT EXISTS evidence (
-  evidence_id TEXT PRIMARY KEY,
+  evidence_id TEXT NOT NULL,
   run_id TEXT NOT NULL,
   task_id TEXT,
   tool TEXT NOT NULL,
   payload TEXT NOT NULL,
   payload_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  owner_id TEXT NOT NULL DEFAULT 'user-coo',
+  PRIMARY KEY (evidence_id, owner_id)
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_run ON evidence(run_id);
 CREATE TABLE IF NOT EXISTS findings (

@@ -32,10 +32,42 @@ function migrateRuntime(db: RuntimeDatabase) {
   if (!hasColumn(db, "surfaces", "owner_id")) db.exec("ALTER TABLE surfaces ADD COLUMN owner_id TEXT");
   if (!hasColumn(db, "activity", "owner_id")) db.exec("ALTER TABLE activity ADD COLUMN owner_id TEXT");
   if (!hasColumn(db, "surfaces", "required_grants")) db.exec("ALTER TABLE surfaces ADD COLUMN required_grants TEXT NOT NULL DEFAULT '[]'");
+  migrateEvidenceKey(db);
   db.prepare("UPDATE thread_state SET owner_id = COALESCE(owner_id, ?), organization_id = COALESCE(organization_id, ?)").run("user-coo", "org-democo");
   db.prepare("UPDATE evidence SET owner_id = COALESCE(owner_id, ?)").run("user-coo");
   db.prepare("UPDATE surfaces SET owner_id = COALESCE(owner_id, ?)").run("user-coo");
   db.prepare("UPDATE activity SET owner_id = COALESCE(owner_id, ?)").run("user-coo");
+}
+
+/**
+ * Schema v4: evidence is keyed by (evidence_id, owner_id). Before, the key was the
+ * evidence id alone and saves were INSERT OR IGNORE, so when a second person ran
+ * the same lookup (same result, same hash id) their row was silently dropped and
+ * they could not open their own evidence. SQLite cannot change a primary key in
+ * place, so the table is rebuilt once, keeping every row.
+ */
+function migrateEvidenceKey(db: RuntimeDatabase) {
+  const columns = db.prepare("PRAGMA table_info(evidence)").all() as Array<{ name: string; pk: number }>;
+  const keyed = columns.filter((column) => column.pk > 0).map((column) => column.name).sort();
+  if (keyed.join(",") === "evidence_id,owner_id") return;
+  db.transaction(() => {
+    db.exec(`CREATE TABLE evidence_v4 (
+      evidence_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      task_id TEXT,
+      tool TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      owner_id TEXT NOT NULL DEFAULT 'user-coo',
+      PRIMARY KEY (evidence_id, owner_id)
+    )`);
+    db.exec(`INSERT OR IGNORE INTO evidence_v4 (evidence_id, run_id, task_id, tool, payload, payload_hash, created_at, owner_id)
+      SELECT evidence_id, run_id, task_id, tool, payload, payload_hash, created_at, COALESCE(owner_id, 'user-coo') FROM evidence`);
+    db.exec("DROP TABLE evidence");
+    db.exec("ALTER TABLE evidence_v4 RENAME TO evidence");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_evidence_run ON evidence(run_id)");
+  })();
 }
 
 export type ActivityKind = "agent_started" | "agent_completed" | "tool_queried" | "finding_discovered" | "task_delegated" | "investigation_completed" | "status" | "action";
@@ -111,16 +143,15 @@ export class RuntimeStore {
   getEvidence(evidenceId: string, ownerId?: string): Record<string, unknown> | undefined {
     const row = (ownerId
       ? this.db.prepare("SELECT payload, owner_id FROM evidence WHERE evidence_id = ? AND owner_id = ?").get(evidenceId, ownerId)
-      : this.db.prepare("SELECT payload, owner_id FROM evidence WHERE evidence_id = ?").get(evidenceId)
+      : this.db.prepare("SELECT payload, owner_id FROM evidence WHERE evidence_id = ? ORDER BY created_at LIMIT 1").get(evidenceId)
     ) as { payload: string; owner_id?: string } | undefined;
     return row ? JSON.parse(row.payload) as Record<string, unknown> : undefined;
   }
 
-  findEvidenceByToolArgs(tool: string, args: unknown, runId?: string): Record<string, unknown> | undefined {
-    const rows = (runId
-      ? this.db.prepare("SELECT payload FROM evidence WHERE tool = ? AND run_id = ? ORDER BY created_at DESC LIMIT 50").all(tool, runId)
-      : this.db.prepare("SELECT payload FROM evidence WHERE tool = ? ORDER BY created_at DESC LIMIT 50").all(tool)
-    ) as Array<{ payload: string }>;
+  findEvidenceByToolArgs(tool: string, args: unknown, runId?: string, ownerId?: string): Record<string, unknown> | undefined {
+    const rows = this.db.prepare(
+      "SELECT payload FROM evidence WHERE tool = ? AND (? IS NULL OR run_id = ?) AND (? IS NULL OR owner_id = ?) ORDER BY created_at DESC LIMIT 50",
+    ).all(tool, runId ?? null, runId ?? null, ownerId ?? null, ownerId ?? null) as Array<{ payload: string }>;
     const wanted = JSON.stringify(args);
     for (const row of rows) {
       const payload = JSON.parse(row.payload) as Record<string, unknown>;
@@ -131,8 +162,11 @@ export class RuntimeStore {
     return undefined;
   }
 
-  evidenceExists(evidenceId: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM evidence WHERE evidence_id = ?").get(evidenceId));
+  /** With an owner, only that owner's row counts: one person's evidence never vouches for another's finding. */
+  evidenceExists(evidenceId: string, ownerId?: string): boolean {
+    return Boolean(ownerId
+      ? this.db.prepare("SELECT 1 FROM evidence WHERE evidence_id = ? AND owner_id = ?").get(evidenceId, ownerId)
+      : this.db.prepare("SELECT 1 FROM evidence WHERE evidence_id = ?").get(evidenceId));
   }
 
   saveFinding(input: { findingId: string; runId: string; taskId: string; payload: unknown; now: string }) {
@@ -359,9 +393,15 @@ export class RuntimeStore {
     return { id: row.id, status: row.status, payload: JSON.parse(row.payload) as Record<string, unknown> };
   }
 
-  /** The tool an evidence record came from, whoever owns it; used to check the capability before ownership. */
-  getEvidenceTool(evidenceId: string): string | undefined {
-    const row = this.db.prepare("SELECT tool FROM evidence WHERE evidence_id = ?").get(evidenceId) as { tool: string } | undefined;
+  /**
+   * The tool an evidence record came from, used to check the capability before
+   * ownership. The owner's own row is preferred; another owner's row is used only
+   * to name the tool (an evidence id is `<tool>-<hash>`, so this reveals nothing),
+   * so a person without the grant gets 403 rather than 404, and the payload is
+   * still read only from their own row (`getEvidenceRecord`).
+   */
+  getEvidenceTool(evidenceId: string, ownerId?: string): string | undefined {
+    const row = this.db.prepare("SELECT tool FROM evidence WHERE evidence_id = ? ORDER BY (owner_id = ?) DESC, created_at LIMIT 1").get(evidenceId, ownerId ?? null) as { tool: string } | undefined;
     return row?.tool;
   }
 

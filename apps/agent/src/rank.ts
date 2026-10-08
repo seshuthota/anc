@@ -184,17 +184,27 @@ export function rankBriefing(input: {
     .slice(0, 3)
     .map((item) => ({ findingId: item.finding.findingId, title: item.finding.title }));
 
+  // The chain starts at the first cause, not at the headline: the primary card
+  // already states the headline and its one figure, so a hop that repeats it
+  // (or carries the headline figure) adds nothing and reads as a second total.
   const chain: Array<{ text: string; kind: "observed" | "inferred"; findingIds: string[] }> = [];
-  const equipment = findings.find((finding) => /fault|sorter|belt|equipment/i.test(finding.title) && finding.findingId !== primaryId);
+  const others = findings.filter((finding) => finding.findingId !== primaryId);
+  const equipment = others.find((finding) => finding.entities.some((entity) => entity.type === "equipment") || /fault|sorter|belt|equipment/i.test(finding.title));
   if (equipment) chain.push({ text: equipment.title, kind: "observed", findingIds: [equipment.findingId] });
-  chain.push({ text: primaryPick.finding.title, kind: "observed", findingIds: [primaryId] });
-  const account = findings.find((finding) => finding.agentId === "customers" && finding.findingId !== primaryId && /at risk|commitment|Godavari|shipper/i.test(finding.title));
-  if (account && chain.length < 3) {
+  // The observed consequence on the floor between the cause and the headline (held runs).
+  const held = others.find((finding) => finding !== equipment && citedMetricIds(finding).includes("route_runs_held_today"));
+  if (held) chain.push({ text: held.title, kind: "observed", findingIds: [held.findingId] });
+  const account = others.find((finding) => finding.agentId === "customers" && /at risk|commitment|Godavari|shipper/i.test(finding.title));
+  if (account) {
     // The hop names the account and what it means for it, not its of-which figure:
     // a shipper's slice of the headline number is not shown beside it.
     const label = account.entities.find((entity) => entity.type === "shipper")?.label;
     chain.push({ text: label ? `${label}: ${account.summary}` : account.summary, kind: "inferred", findingIds: [account.findingId] });
   }
+  const headline = { text: primaryPick.finding.title, figure: primaryPick.metric?.value };
+  // Keep the account hop (the "so what") when there are more than three candidates.
+  const kept = chain.filter((hop) => !chainHopRepeatsHeadline(hop.text, headline));
+  const trimmed = kept.length > 3 ? [...kept.slice(0, 2), kept[kept.length - 1]!] : kept;
 
   return {
     primary: {
@@ -202,12 +212,54 @@ export function rankBriefing(input: {
       metric: primaryPick.metric,
       whyItMatters: primaryPick.finding.summary,
       confidence: primaryPick.metric && serious(primaryPick.finding) ? "high" : "medium",
-      chain: chain.slice(0, 3),
+      chain: trimmed,
     },
     secondary,
     quiet: false,
     suggestedActions: [],
   };
+}
+
+/** Numeric tokens in a text, normalized so "4,000", "4000" and "4000.0" compare equal. Clock times are skipped. */
+export function figureTokens(text: string): string[] {
+  return (text.match(/\d[\d,.:]*\d|\d/g) ?? [])
+    .filter((token) => !token.includes(":"))
+    .map((token) => token.replace(/,/g, "").replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""));
+}
+
+/** How a headline figure can appear in prose: the raw value, rounded, and as a percentage for a 0–1 rate. */
+function headlineFigureForms(figure: number | string | undefined): Set<string> {
+  const forms = new Set<string>();
+  if (figure === undefined || figure === null || figure === "") return forms;
+  if (typeof figure === "string") {
+    for (const token of figureTokens(figure)) forms.add(token);
+    return forms;
+  }
+  for (const value of [String(figure), figure.toFixed(0), figure.toFixed(1)]) for (const token of figureTokens(value)) forms.add(token);
+  if (figure > 0 && figure < 1) for (const token of figureTokens((figure * 100).toFixed(1))) forms.add(token);
+  return forms;
+}
+
+/**
+ * Chain rule (applies to the deterministic chain and to a Lead Analyst's chain):
+ * a hop may not equal the headline, contain the headline's text, or carry the
+ * headline figure. The figure is shown once, on the primary card.
+ */
+export function chainHopRepeatsHeadline(hopText: string, headline: { text?: string; figure?: number | string }): boolean {
+  const norm = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const hop = norm(hopText);
+  const head = headline.text ? norm(headline.text) : "";
+  if (head && (hop === head || hop.includes(head))) return true;
+  const forms = headlineFigureForms(headline.figure);
+  if (!forms.size) return false;
+  return figureTokens(hopText).some((token) => forms.has(token));
+}
+
+/** Errors for a chain that breaks the rule above, worded as review feedback. */
+export function reviewChain(chain: Array<{ text: string }>, headline: { text?: string; figure?: number | string }, where = "chain"): string[] {
+  return chain.flatMap((hop, index) => (chainHopRepeatsHeadline(hop.text, headline)
+    ? [`${where} ${index + 1} repeats the headline or its figure${headline.figure !== undefined ? ` (${headline.figure})` : ""}; start the chain at the first cause`]
+    : []));
 }
 
 /** Review a model Lead Analyst ranking against the deterministic plan. The model may not pick a different primary. */

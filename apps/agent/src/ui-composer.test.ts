@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PresentationInput } from "@anc/contracts";
-import { composeSurface, useComposerModel } from "./ui-composer.js";
+import { composeSurface, reviewBriefingBudget, useComposerModel } from "./ui-composer.js";
 
 const presentation: PresentationInput = {
   title: "Parcels at risk today",
@@ -195,5 +195,55 @@ describe("UI Composer briefing budget (R3/R4)", () => {
     useComposerModel(async (request) => { seen = request.data; return { components: goodBriefing }; });
     await composeSurface("s", briefingPresentation, { objective: "brief me", mode: "briefing" });
     expect(Object.keys(seen as object).sort()).toEqual(["briefing", "title"]);
+  });
+
+  it("rejects a Collapsible holding four secondary items (A4)", async () => {
+    const four: PresentationInput = {
+      ...briefingPresentation,
+      briefing: {
+        ...briefingPresentation.briefing!,
+        secondary: [
+          ...briefingPresentation.briefing!.secondary,
+          { id: "f-c", title: "Chennai locker: 64 arrivals with no space", evidenceIds: ["ev-5"], question: "Look into: lockers" },
+          { id: "f-d", title: "11 complaints need an owner", evidenceIds: ["ev-6"], question: "Look into: complaints" },
+        ],
+      },
+    };
+    const tree = [
+      ...goodBriefing.filter((component) => component.id !== "rest_col"),
+      { id: "rest_col", component: "Column", children: ["rest_a", "rest_b", "rest_c", "rest_d"] },
+      { id: "rest_c", component: "Text", text: { path: "/briefing/secondary/f-c/title" } },
+      { id: "rest_d", component: "Text", text: { path: "/briefing/secondary/f-d/title" } },
+    ];
+    const feedback: string[] = [];
+    useComposerModel(async (_request, previous) => { if (previous) feedback.push(previous); return { components: tree }; });
+    const surface = await composeSurface("s", four, { objective: "brief me", mode: "briefing" });
+    expect(surface.source).toBe("template");
+    expect(feedback.join("\n")).toMatch(/collapsed rest holds at most three items; this tree has 4/);
+    // The budget check on its own, independent of whether the paths resolve.
+    const byId = new Map(tree.map((component) => [String(component.id), component as Record<string, unknown>]));
+    const reachable = new Set(tree.map((component) => String(component.id)));
+    expect(reviewBriefingBudget(byId, reachable, tree, { primary: {} })).toEqual(expect.arrayContaining([expect.stringMatching(/at most three items; this tree has 4/)]));
+  });
+
+  it("trims more than three secondary items when the fallback template is used (A4)", async () => {
+    const five: PresentationInput = {
+      ...briefingPresentation,
+      briefing: {
+        ...briefingPresentation.briefing!,
+        secondary: ["a", "b", "c", "d", "e"].map((id) => ({ id: `f-${id}`, title: `Item ${id}`, evidenceIds: [`ev-${id}`], question: `Look into: ${id}` })),
+      },
+    };
+    // Model rejected (it binds a path that does not exist), so the budgeted template is shown.
+    useComposerModel(async () => ({ components: [...goodBriefing.filter((component) => component.id !== "rest_a"), { id: "rest_a", component: "Text", text: { path: "/briefing/secondary/f-zz/title" } }] }));
+    const surface = await composeSurface("s", five, { objective: "brief me", mode: "briefing" });
+    expect(surface.source).toBe("template");
+    const components = componentsOf(surface);
+    const items = components.find((component) => component.id === "rest_items") as { children: string[] };
+    expect(items.children).toHaveLength(3);
+    const model = surface.messages.find((message) => "updateDataModel" in message) as { updateDataModel: { value: { briefing: { secondary: Record<string, unknown> } } } };
+    expect(Object.keys(model.updateDataModel.value.briefing.secondary)).toEqual(["f-a", "f-b", "f-c"]);
+    const drills = components.filter((component) => component.component === "Button" && (component.action as { event: { name: string } }).event.name === "investigate" && String(component.id).startsWith("rest_"));
+    expect(drills).toHaveLength(3);
   });
 });

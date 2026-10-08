@@ -16,7 +16,7 @@ export type EvidenceAccess =
 
 /** Capability first (403), then ownership (404); the payload comes back redacted for the person. */
 export function openEvidence(store: Pick<RuntimeStore, "getEvidenceTool" | "getEvidenceRecord">, principal: Principal, evidenceId: string): EvidenceAccess {
-  const tool = store.getEvidenceTool(evidenceId);
+  const tool = store.getEvidenceTool(evidenceId, principal.id);
   if (!tool) return { status: 404, error: "evidence not found" };
   const capability = TOOL_CAPABILITIES[tool];
   if (!capability || !hasGrant(principal, capability)) return { status: 403, error: "Not authorized for this evidence" };

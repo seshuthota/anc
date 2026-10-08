@@ -11,16 +11,17 @@ export function stripRuntimeMetricFields(metric: Metric): Metric {
 /**
  * Checks a finding against stored evidence and returns the checked finding.
  *
- * - Every cited evidence id must exist.
+ * - Every cited evidence id must exist (for `ownerId`, when given: evidence is
+ *   stored per person, so one person's record never vouches for another's finding).
  * - A metric in a claim that names resultPaths must match the evidence at one of them
  *   (or at its own runtime-bound `resultPath`, which is then the only path accepted).
  * - A metric in a claim with no resultPaths cannot be checked. It is kept for prose,
  *   but stripped of any registry binding, so it is never eligible as a headline figure.
  */
-export function validateFinding(store: RuntimeStore, finding: AgentFinding): AgentFinding {
+export function validateFinding(store: Pick<RuntimeStore, "evidenceExists" | "getEvidence">, finding: AgentFinding, ownerId?: string): AgentFinding {
   for (const claim of finding.claims) {
     for (const evidenceId of claim.evidenceIds) {
-      if (!store.evidenceExists(evidenceId)) {
+      if (!store.evidenceExists(evidenceId, ownerId)) {
         throw new Error(`Finding ${finding.findingId} cites unknown evidence ${evidenceId}`);
       }
     }
@@ -32,7 +33,7 @@ export function validateFinding(store: RuntimeStore, finding: AgentFinding): Age
         throw new Error(`Numeric claim ${metric.name} is bound to evidence ${metric.evidenceId}, which its claim does not cite`);
       }
       const matches = evidenceIds.some((evidenceId) => {
-        const evidence = store.getEvidence(evidenceId);
+        const evidence = store.getEvidence(evidenceId, ownerId);
         return paths.some((resultPath) => figureMatches(readResultPath(evidence?.result, resultPath), metric.value));
       });
       if (!matches) {
