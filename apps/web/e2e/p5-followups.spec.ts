@@ -1,13 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { agentUrl } from "./agent-url";
 
 const outDir = resolve(__dirname, "../../../test-results");
 const primary = (page: Page) => page.locator('[data-a2ui="PrimaryFinding"]');
 const header = (page: Page) => page.locator('[data-a2ui="ContextHeader"]');
 const anchors = async (page: Page) => (await primary(page).count()) + (await header(page).count());
 const revision = async (page: Page) => {
-  const response = await page.request.get("http://127.0.0.1:4110/runtime/state", { headers: { "x-anc-principal": "user-coo" } });
+  const response = await page.request.get(agentUrl("/runtime/state"), { headers: { "x-anc-principal": "user-coo" } });
   return ((await response.json()) as { surface: { revision: number } }).surface.revision;
 };
 

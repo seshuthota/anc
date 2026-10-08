@@ -285,6 +285,12 @@ export type PriorBriefing = {
 
 const SURFACE_ACTIONS = new Set(["propose_action", "confirm_action", "cancel_action", "prepare_assignment", "select_assignee", "commit_assignment", "show_evidence", "back_to_briefing", "save_draft", "set_selection"]);
 
+/** Whole-word mention: "hub-hyd" is not found in "hub-hyderabad", nor "Godavari" in "Godavarikhani". */
+function mentions(text: string, phrase: string): boolean {
+  const escaped = phrase.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`).test(text);
+}
+
 export function classifyTurn(input: { objective: string; action?: string; entities?: EntityRef[]; prior?: PriorBriefing }): { kind: TurnKind; label?: string } {
   if (input.action && SURFACE_ACTIONS.has(input.action)) return { kind: "action" };
   const text = input.objective.trim().toLowerCase();
@@ -296,7 +302,7 @@ export function classifyTurn(input: { objective: string; action?: string; entiti
   const selected = input.entities?.find(known);
   if (selected) return { kind: "drill", label: known(selected)?.label ?? input.prior.label };
   // A typed question that names a record the briefing showed, by id or by name.
-  const named = input.prior.entities.find((entity) => text.includes(entity.id.toLowerCase()) || (entity.label && entity.label.length >= 4 && text.includes(entity.label.toLowerCase())));
+  const named = input.prior.entities.find((entity) => mentions(text, entity.id) || (entity.label && entity.label.length >= 4 && mentions(text, entity.label)));
   if (named) return { kind: "drill", label: named.label ?? input.prior.label };
   return { kind: "new_topic" };
 }

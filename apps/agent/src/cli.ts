@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { publicState, restoreSurface, runInvestigation, store } from "./runtime.js";
 import { DEFAULT_THREAD_ID } from "./windows.js";
+import { migrateCompanyDatabase } from "./mcp-client.js";
 
 const [command, ...rest] = process.argv.slice(2);
 
@@ -94,6 +95,7 @@ function inspectSurface(state: ReturnType<typeof publicState>) {
 }
 
 async function main() {
+  migrateCompanyDatabase();
   if (command === "investigate") {
     const question = rest.filter((item) => item !== "--" && item !== "--write").join(" ").trim() || "Brief me: what needs my attention this morning?";
     const state = await runInvestigation({ question, threadId: DEFAULT_THREAD_ID });

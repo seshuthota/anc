@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentFinding } from "@anc/contracts";
 import { resolvePrincipal } from "@anc/policy";
 import { applyActionOrder, reviewActionOrder, selectBriefingActions } from "./action-catalog.js";
+import { businessDate } from "./operations.js";
 
 const finding = (findingId: string, title: string, entities: AgentFinding["entities"]): AgentFinding => ({
   findingId, taskId: "t", agentId: "a", kind: "observation", title, summary: title, severity: "high", createdAt: "2026-09-21T03:00:00.000Z", limitations: [], entities,
@@ -27,7 +28,17 @@ describe("briefing action catalog (R6)", () => {
     expect(selectBriefingActions({ primary: atRisk, related: [], metricId: "hub_backlog", principal: coo })).toEqual([]);
     expect(selectBriefingActions({ primary: atRisk, related: [fault, shipper], metricId: "parcels_at_risk_today", principal: resolvePrincipal("user-accounts") }).map((action) => action.id)).toEqual(["notify_shipper"]);
     expect(selectBriefingActions({ primary: atRisk, related: [fault, shipper], metricId: "parcels_at_risk_today", principal: resolvePrincipal("user-care") }).map((action) => action.id)).toEqual(["assign_complaints"]);
-    expect(selectBriefingActions({ primary: atRisk, related: [fault], principal: coo, completed: new Set(["escalate_equipment_fault:eq-hyd-0920"]) })).toEqual([]);
+    expect(selectBriefingActions({ primary: atRisk, related: [fault], principal: coo, completed: new Set(["escalate_equipment_fault:eq-hyd-0920"]) })).toEqual([]);    expect(selectBriefingActions({ primary: atRisk, related: [fault, shipper], metricId: "parcels_at_risk_today", principal: coo, completed: new Set(["notify_shipper:shipper-003", "assign_complaints:late-at-risk"]) }).map((action) => action.id)).toEqual(["escalate_equipment_fault"]);
+  });
+
+  it("offers nothing when there is no principal: no principal means no grants (Reviewer M6)", () => {
+    expect(selectBriefingActions({ primary: atRisk, related: [fault, shipper], metricId: "parcels_at_risk_today" })).toEqual([]);
+  });
+
+  it("dates notify idempotency keys from the data's as-of date, else the demo clock (Reviewer M4)", () => {
+    expect(businessDate("2026-09-22T07:00:00.000+05:30")).toBe("2026-09-22");
+    expect(businessDate(undefined)).toBe("2026-09-21");
+    expect(businessDate("yesterday")).toBe("2026-09-21");
   });
 
   it("lets the Lead Analyst reorder the actions but not add, drop or repeat one", () => {

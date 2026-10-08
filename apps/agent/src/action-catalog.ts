@@ -61,7 +61,8 @@ export function selectBriefingActions(input: {
 }): PlannedAction[] {
   const { primary, related, principal } = input;
   const onCard = [primary, ...related];
-  const granted = (action: CatalogAction) => !principal || hasGrant(principal, action.requiredGrant);
+  // No principal means no grants: nothing is offered to an unknown caller.
+  const granted = (action: CatalogAction) => principal !== undefined && hasGrant(principal, action.requiredGrant);
   const done = (id: CatalogActionId, recordId: string) => input.completed?.has(`${id}:${recordId}`) ?? false;
   const first = (type: EntityRef["type"]) => {
     for (const finding of onCard) {

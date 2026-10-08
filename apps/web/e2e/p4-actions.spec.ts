@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { agentUrl } from "./agent-url";
 
 const outDir = resolve(__dirname, "../../../test-results");
 const primary = (page: Page) => page.locator('[data-a2ui="PrimaryFinding"]');
@@ -18,7 +19,7 @@ test("an unauthorized persona gets no Escalate button, and a forged request is r
   await expect(page.getByRole("button", { name: "Look into this" })).toBeVisible({ timeout: 90_000 });
   await expect(page.getByRole("button", { name: /Notify Godavari Organics/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Escalate/ })).toHaveCount(0);
-  const forged = await request.post("http://127.0.0.1:4110/runtime/actions", {
+  const forged = await request.post(agentUrl("/runtime/actions"), {
     headers: { "x-anc-principal": "user-accounts", "content-type": "application/json" },
     data: { actionId: `forged-${Date.now()}`, name: "propose_action", parameters: { actionId: "escalate_equipment_fault" } },
   });
@@ -64,7 +65,7 @@ test("Escalate → confirm on the same card → receipt; a double click writes o
   await page.getByRole("button", { name: "Close" }).click();
 
   // A second confirm on the old card is a no-op on the server: one write, one escalation.
-  const state = await page.request.get("http://127.0.0.1:4110/runtime/state", { headers: { "x-anc-principal": "user-coo" } });
+  const state = await page.request.get(agentUrl("/runtime/state"), { headers: { "x-anc-principal": "user-coo" } });
   const body = await state.json() as { surface: { dataModel: { briefing: { primary: { receipts: unknown[] } } } } };
   expect(body.surface.dataModel.briefing.primary.receipts).toHaveLength(1);
 });

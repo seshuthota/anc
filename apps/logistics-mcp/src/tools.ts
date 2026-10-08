@@ -307,7 +307,7 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
     if (!before) throw new Error(`Unknown complaint: ${args.complaintId}`);
     if (before.status !== "open") throw new Error(`Complaint ${args.complaintId} is closed`);
     if (!db.prepare("SELECT 1 FROM employees WHERE id = ? AND team = 'customer-care'").get(args.assigneeId)) throw new Error(`Assignee ${args.assigneeId} is not eligible`);
-    const changed = db.prepare("UPDATE complaints SET assignee_id = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?").run(args.assigneeId, toLocalIso(Date.now()), args.complaintId, args.expectedVersion);
+    const changed = db.prepare("UPDATE complaints SET assignee_id = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?").run(args.assigneeId, NOW, args.complaintId, args.expectedVersion);
     if (!changed.changes) throw new Error("Complaint version is stale");
     const after = db.prepare("SELECT id, shipper_id shipperId, assignee_id assigneeId, version, status, updated_at updatedAt FROM complaints WHERE id = ?").get(args.complaintId);
     return run("commit_complaint_assignment", args, { before, after }, args);
@@ -325,7 +325,7 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
     if (before.escalatedAt) throw new Error(`Equipment event ${args.eventId} is already escalated`);
     if (!before.onCallEngineerId) throw new Error(`No engineer is on call for this hub`);
     const changed = db.prepare("UPDATE equipment_events SET escalated_to = ?, escalated_at = ?, version = version + 1 WHERE id = ? AND version = ? AND ended_at IS NULL AND escalated_at IS NULL")
-      .run(before.onCallEngineerId, toLocalIso(Date.now()), args.eventId, args.expectedVersion);
+      .run(before.onCallEngineerId, NOW, args.eventId, args.expectedVersion);
     if (!changed.changes) throw new Error("Equipment event version is stale");
     return run("escalate_equipment_fault", args, { before, after: read() }, args);
   });
@@ -339,7 +339,7 @@ export function registerLogisticsTools(server: any, db: Database.Database, optio
     if (prior) return run("notify_shipper", args, { before: prior, after: prior, created: false }, { shipperId: args.shipperId, topic: args.topic });
     const id = `ntf-${createHash("sha256").update(args.idempotencyKey).digest("hex").slice(0, 12)}`;
     db.prepare("INSERT INTO shipper_notifications (id, shipper_id, account_manager_id, topic, message, status, idempotency_key, requested_by, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)")
-      .run(id, shipper.id, shipper.accountManagerId, args.topic, args.message, args.idempotencyKey, args.requestedBy, toLocalIso(Date.now()));
+      .run(id, shipper.id, shipper.accountManagerId, args.topic, args.message, args.idempotencyKey, args.requestedBy, NOW);
     return run("notify_shipper", args, { before: null, after: existing.get(args.idempotencyKey), created: true }, { shipperId: args.shipperId, topic: args.topic });
   });
 }

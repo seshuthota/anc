@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentFinding } from "@anc/contracts";
 import { resolvePrincipal } from "@anc/policy";
 import { prepareTestEnvironment } from "./test-env.js";
@@ -462,6 +462,38 @@ describe("briefing actions (P4)", () => {
     expect(briefingOf(refused).actions.map((action) => action.id)).toContain("escalate_equipment_fault");
   }, 120_000);
 
+  it("a proposal can only be confirmed on the thread it was made on (Reviewer M3)", async () => {
+    const thread = "t-act-thread";
+    await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const before = await snapshot();
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    const proposalId = briefingOf(proposed).pending!.proposalId;
+    await expect(handleAction({ name: "confirm_action", threadId: "t-act-thread-other", parameters: { proposalId } }, coo)).rejects.toThrow(/Proposal not found/);
+    await expect(handleAction({ name: "cancel_action", threadId: "t-act-thread-other", parameters: { proposalId } }, coo)).rejects.toThrow(/Proposal not found/);
+    expect(await snapshot()).toEqual(before);
+    expect(store.getProposal(proposalId, coo.id)!.status).toBe("prepared");
+    await act(thread, coo, "cancel_action", { parameters: { proposalId } });
+  }, 120_000);
+
+  it("an expired proposal clears the inline confirm and says why on the card; nothing is written (Reviewer M3)", async () => {
+    const thread = "t-act-expired";
+    await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    const proposalId = briefingOf(proposed).pending!.proposalId;
+    const proposal = store.getProposal(proposalId, coo.id)!;
+    store.saveProposal({ ...proposal, ownerId: coo.id, expiresAt: "2026-09-21T01:00:00.000Z", now: new Date().toISOString() });
+    const before = await snapshot();
+    const after = await act(thread, coo, "confirm_action", { parameters: { proposalId } });
+    expect(await snapshot()).toEqual(before);
+    const briefing = briefingOf(after);
+    expect(briefing.pending).toBeUndefined();
+    expect(buttonsOf(after)).not.toContain("confirm_action");
+    expect(briefing.primary!.receipts!.at(-1)).toMatchObject({ status: "failed", actionId: "escalate_equipment_fault" });
+    expect(briefing.primary!.receipts!.at(-1)!.text).toMatch(/^Not done: this confirmation expired.*Nothing was written; propose it again/);
+    expect(briefing.actions.map((action) => action.id)).toContain("escalate_equipment_fault");
+    expect(store.getProposal(proposalId, coo.id)!.status).toBe("expired");
+  }, 120_000);
+
   it("escalates the fault: propose, confirm, row changed, re-read, receipt on the same surface; a double click is a no-op", async () => {
     const thread = "t-act-escalate";
     const brief = await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
@@ -491,7 +523,7 @@ describe("briefing actions (P4)", () => {
     expect(briefing.pending).toBeUndefined();
     const receipt = briefing.primary!.receipts!.at(-1)!;
     expect(receipt).toMatchObject({ status: "succeeded", actionId: "escalate_equipment_fault" });
-    expect(receipt.text).toMatch(/^Escalated Sorter belt B to Venkatesh Rao at \d{2}:\d{2} IST · maintenance log updated · receipt op-/);
+    expect(receipt.text).toMatch(/^Escalated Sorter belt B to Venkatesh Rao at 07:00 IST · maintenance log updated · receipt op-/);
     expect(receipt.evidenceIds[0]).toMatch(/^list_equipment_events-/);
     expect(briefing.actions.map((action) => action.id)).not.toContain("escalate_equipment_fault");
     // A late duplicate confirm is a no-op too.
@@ -503,24 +535,59 @@ describe("briefing actions (P4)", () => {
     expect(briefingOf(next).actions.map((action) => action.id)).toEqual(["notify_shipper", "assign_complaints", "drill_primary"]);
   }, 180_000);
 
+  it("a write that succeeded but cannot be re-read still gets a succeeded receipt and stays committed (Reviewer M1)", async () => {
+    // Re-open the fault the previous test escalated, so it is offered again.
+    const { openLogisticsDatabase } = await import("@anc/logistics-db");
+    const writer = openLogisticsDatabase(process.env.LOGISTICS_DB_PATH!);
+    writer.prepare("UPDATE equipment_events SET escalated_to = NULL, escalated_at = NULL, version = version + 1 WHERE id = 'eq-hyd-0920'").run();
+    writer.close();
+    const thread = "t-act-reread";
+    await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
+    const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "escalate_equipment_fault" } });
+    const proposalId = briefingOf(proposed).pending!.proposalId;
+    const { CompanyMcpClient } = await import("./mcp-client.js");
+    const original = CompanyMcpClient.prototype.call;
+    const spy = vi.spyOn(CompanyMcpClient.prototype, "call").mockImplementation(function (this: InstanceType<typeof CompanyMcpClient>, ...args: Parameters<typeof original>) {
+      const runId = (this as unknown as { ctx?: { runId?: string } }).ctx?.runId ?? "";
+      if (runId.startsWith("reread-")) return Promise.reject(new Error("company server unavailable"));
+      return original.apply(this, args);
+    });
+    try {
+      const done = await act(thread, coo, "confirm_action", { parameters: { proposalId } });
+      const receipt = briefingOf(done).primary!.receipts!.at(-1)!;
+      expect(receipt).toMatchObject({ status: "succeeded", actionId: "escalate_equipment_fault", evidenceIds: [] });
+      expect(receipt.text).toMatch(/^Escalated Sorter belt B to Venkatesh Rao · done, but the record could not be re-read to confirm it just now · receipt op-/);
+      expect(briefingOf(done).pending).toBeUndefined();
+      expect(briefingOf(done).actions.map((action) => action.id)).not.toContain("escalate_equipment_fault");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(store.getProposal(proposalId, coo.id)!.status).toBe("committed");
+    const hyd = (await snapshot()).equipment.find((row) => row.id === "eq-hyd-0920")!;
+    expect(hyd).toMatchObject({ escalatedTo: "emp-eng-hyd", escalated: 1 });
+  }, 180_000);
+
   it("queues a notice for Godavari Organics' account manager and sends nothing", async () => {
     const thread = "t-act-notify";
     await runInvestigation({ question: BRIEF, threadId: thread, principal: coo });
     const before = await snapshot();
     const proposed = await act(thread, coo, "propose_action", { parameters: { actionId: "notify_shipper" } });
+    // The idempotency key's day comes from the data's "as of" date (the demo clock), not a constant (Reviewer M4).
+    expect(store.getProposal(briefingOf(proposed).pending!.proposalId, coo.id)!.payload.idempotencyKey).toBe("notify:shipper-003:at-risk-today:2026-09-21");
     expect(briefingOf(proposed).pending!.text).toMatch(/Queue a delay notice for Godavari Organics with their account manager, Arjun Mehta\?.*Nothing is sent to the shipper\./);
     const done = await act(thread, coo, "confirm_action", { parameters: { proposalId: briefingOf(proposed).pending!.proposalId } });
     const after = await snapshot();
     expect(before.notifications).toEqual([]);
     expect(after.notifications).toEqual([{ shipperId: "shipper-003", accountManagerId: "emp-am-1", topic: "at-risk-today", status: "queued", requestedBy: coo.id }]);
     expect({ ...after, notifications: [] }).toEqual({ ...before, notifications: [] });
-    expect(briefingOf(done).primary!.receipts!.at(-1)!.text).toMatch(/^Notice for Godavari Organics queued for account manager Arjun Mehta at \d{2}:\d{2} IST · nothing was sent · receipt op-/);
-    // Proposing it again reads the queued notice and offers nothing to confirm.
+    expect(briefingOf(done).primary!.receipts!.at(-1)!.text).toMatch(/^Notice for Godavari Organics queued for account manager Arjun Mehta at 07:00 IST · nothing was sent · receipt op-/);
+    // The next briefing reads the queued notice and does not offer it again (Reviewer M5),
+    // and a forged propose for it is refused.
     const thread2 = "t-act-notify-2";
-    await runInvestigation({ question: BRIEF, threadId: thread2, principal: coo });
-    const repeat = await act(thread2, coo, "propose_action", { parameters: { actionId: "notify_shipper" } });
-    expect(briefingOf(repeat).pending).toMatchObject({ blocked: true });
-    expect(buttonsOf(repeat)).not.toContain("confirm_action");
+    const next = await runInvestigation({ question: BRIEF, threadId: thread2, principal: coo });
+    expect(briefingOf(next).actions.map((action) => action.id)).not.toContain("notify_shipper");
+    expect(briefingOf(next).actions.map((action) => action.id)).toContain("assign_complaints");
+    await expect(act(thread2, coo, "propose_action", { parameters: { actionId: "notify_shipper" } })).rejects.toThrow(/not offered/);
   }, 180_000);
 
   it("assigns the open late complaints about today's at-risk parcels across the care team", async () => {
@@ -539,6 +606,9 @@ describe("briefing actions (P4)", () => {
     expect(after.complaints.v - before.complaints.v).toBe(open.length);
     expect({ ...after, lateAtRisk: [], complaints: { n: 0, v: 0 } }).toEqual({ ...before, lateAtRisk: [], complaints: { n: 0, v: 0 } });
     expect(briefingOf(done).primary!.receipts!.at(-1)!.text).toMatch(new RegExp(`^Assigned ${open.length} late complaints to Farah Siddiqui, Karthik Iyer, Sneha Kulkarni · 0 still without an owner · receipt op-`));
+    // With no late at-risk complaint left unowned, the next briefing does not offer it again (Reviewer M5).
+    const next = await runInvestigation({ question: BRIEF, threadId: "t-act-after-assign", principal: coo });
+    expect(briefingOf(next).actions.map((action) => action.id)).not.toContain("assign_complaints");
   }, 180_000);
 });
 

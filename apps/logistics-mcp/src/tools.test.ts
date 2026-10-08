@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { openLogisticsDatabase, seedLogistics, type LogisticsScenario } from "@anc/logistics-db";
+import { DEMO_CLOCK, openLogisticsDatabase, seedLogistics, type LogisticsScenario } from "@anc/logistics-db";
 import { registerLogisticsTools, TOOL_DOMAINS, type LogisticsTool } from "./tools.js";
 
 function harness(scenario: LogisticsScenario = "hub-fault", authorize?: (tool: LogisticsTool) => void, writable?: boolean) {
@@ -196,6 +196,19 @@ describe("logistics MCP tools", () => {
     expect(count()).toBe(1);
     const shipper = call("get_shipper", { shipperId: "shipper-003" }).result;
     expect(shipper.queuedNotifications).toEqual([expect.objectContaining({ id: first.after.id, status: "queued", accountManagerId: "emp-am-1" })]);
+    db.close();
+  });
+
+  it("stamps every write with the demo clock (Mon 21 Sep 07:00 IST), never the wall clock (Tester T2)", () => {
+    const { db, call } = harness();
+    call("escalate_equipment_fault", { eventId: "eq-hyd-0920", expectedVersion: 1 });
+    expect(db.prepare("SELECT escalated_at t FROM equipment_events WHERE id = 'eq-hyd-0920'").get()).toEqual({ t: DEMO_CLOCK });
+    call("notify_shipper", { shipperId: "shipper-003", topic: "at-risk-today", message: "m", idempotencyKey: "clock-probe", requestedBy: "user-coo" });
+    expect(db.prepare("SELECT created_at t FROM shipper_notifications WHERE idempotency_key = 'clock-probe'").get()).toEqual({ t: DEMO_CLOCK });
+    const open = db.prepare("SELECT id, version FROM complaints WHERE status = 'open' AND assignee_id IS NULL LIMIT 1").get() as { id: string; version: number };
+    call("commit_complaint_assignment", { complaintId: open.id, assigneeId: "emp-care-2", expectedVersion: open.version });
+    expect(db.prepare("SELECT updated_at t FROM complaints WHERE id = ?").get(open.id)).toEqual({ t: DEMO_CLOCK });
+    expect(DEMO_CLOCK).toBe("2026-09-21T07:00:00.000+05:30");
     db.close();
   });
 

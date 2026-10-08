@@ -25,7 +25,13 @@ describe("turn classification (R5)", () => {
   it("treats a typed question about a record on the briefing as a drill", () => {
     expect(classifyTurn({ objective: "How is Godavari Organics doing on on-time delivery?", prior })).toEqual({ kind: "drill", label: "Godavari Organics" });
     expect(classifyTurn({ objective: "what happened to eq-hyd-0920", prior })).toEqual({ kind: "drill", label: "Sorter belt B" });
-    expect(classifyTurn({ objective: "Tell me more", entities: [{ type: "hub", id: "hub-hyd" }], prior })).toEqual({ kind: "drill", label: prior.label });
+    expect(classifyTurn({ objective: "Tell me more", entities: [{ type: "hub", id: "hub-hyd" }], prior })).toEqual({ kind: "drill", label: prior.label });    expect(classifyTurn({ objective: "status of hub-hyd today?", prior })).toEqual({ kind: "drill", label: prior.label });
+  });
+
+  it("matches a named record as a whole word, not inside another word (Reviewer M7)", () => {
+    expect(classifyTurn({ objective: "what about hub-hyderabad-2", prior })).toEqual({ kind: "new_topic" });
+    expect(classifyTurn({ objective: "how is godavari organicsplus doing", prior })).toEqual({ kind: "new_topic" });
+    expect(classifyTurn({ objective: "Godavari Organics?", prior })).toEqual({ kind: "drill", label: "Godavari Organics" });
   });
 
   it("starts a new topic for a new briefing, an unrelated question, or with no briefing on screen", () => {

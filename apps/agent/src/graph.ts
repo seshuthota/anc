@@ -17,6 +17,7 @@ import { composeSurface } from "./ui-composer.js";
 import { withContextHeader } from "./composer.js";
 import { runSpecialist, specialistLabel } from "./specialists/index.js";
 import { CURRENT, TIMEZONE } from "./windows.js";
+import { completedBriefingActions } from "./operations.js";
 
 export type GraphState = {
   objective: string;
@@ -363,7 +364,8 @@ async function synthesizeNode(state: typeof State.State): Promise<Partial<GraphS
   const findings = Object.values(state.findings);
   const reconciled = state.reconciled ?? reconcileMetrics(findings);
   const audience = `${ctx.principal.title}. ${ctx.principal.preferences.roleDescription} Cares about: ${ctx.principal.preferences.priorities.join(", ")}.`;
-  const outcome = await synthesize({ objective: state.objective, audience, findings, runId: state.runId, reconciled, principal: ctx.principal, completedActions: completedActions(ctx.store, findings, ctx.principal.id) });
+  const completedActions = await completedBriefingActions(ctx.store, ctx.principal, findings, state.runId);
+  const outcome = await synthesize({ objective: state.objective, audience, findings, runId: state.runId, reconciled, principal: ctx.principal, completedActions });
   if (outcome.reason && outcome.synthesis) {
     ctx.emit("Lead Analyst ranking was replaced by the deterministic ranker", "status");
     recordSubstitution(state.runId, "lead-analyst", outcome.reason);
@@ -379,24 +381,7 @@ async function synthesizeNode(state: typeof State.State): Promise<Partial<GraphS
     ctx.emit("Lead Analyst could not connect the findings; showing them side by side", "status");
     recordSubstitution(state.runId, "lead-analyst", outcome.reason);
   }
-  return { reconciled, briefingPlan: outcome.briefingPlan ?? rankBriefing({ findings, reconciled, principal: ctx.principal }) };
-}
-
-/**
- * Operations already done, read from the evidence behind this run's findings (an
- * equipment fault that is already escalated), so the briefing does not offer them
- * again. Evidence is content-addressed per owner, so it is looked up by id rather
- * than by run: an identical result read earlier keeps its first run id.
- */
-function completedActions(store: RuntimeStore, findings: AgentFinding[], ownerId: string): Set<string> {
-  const done = new Set<string>();
-  const ids = new Set(findings.flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds)).filter((id) => id.startsWith("list_equipment_events-")));
-  for (const id of ids) {
-    const payload = store.getEvidence(id, ownerId);
-    const rows = ((payload?.result as { rows?: Array<Record<string, unknown>> } | undefined)?.rows ?? []);
-    for (const row of rows) if (row.escalatedAt) done.add(`escalate_equipment_fault:${String(row.id)}`);
-  }
-  return done;
+  return { reconciled, briefingPlan: outcome.briefingPlan ?? rankBriefing({ findings, reconciled, principal: ctx.principal, completedActions }) };
 }
 
 function routeAfterPlan(state: typeof State.State): "execute" | "compose" | typeof END {  if (state.status === "cancelled") return END;

@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { DEFAULT_LOGISTICS_DB_PATH } from "@anc/logistics-db";
+import { DEFAULT_LOGISTICS_DB_PATH, ensureLogisticsSchema } from "@anc/logistics-db";
 import { TOOL_DOMAINS } from "@anc/logistics-mcp/tools";
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
@@ -20,9 +20,18 @@ export const TOOL_ALLOWLISTS = Object.entries(TOOL_DOMAINS).reduce<Record<Domain
 const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const companyMcpRoot = fileURLToPath(new URL("../../logistics-mcp", import.meta.url));
 
-function companyDbPath(): string {
+export function companyDbPath(): string {
   const raw = process.env.LOGISTICS_DB_PATH ?? DEFAULT_LOGISTICS_DB_PATH;
   return isAbsolute(raw) ? raw : resolve(workspaceRoot, raw);
+}
+
+/**
+ * Brings a company database seeded before schema v2 up to date, once, when the
+ * runtime starts (schema only; no row changes). It runs in the runtime process,
+ * so a read-only specialist process never needs, or opens, a writable handle.
+ */
+export function migrateCompanyDatabase(path = companyDbPath()): void {
+  if (existsSync(path)) ensureLogisticsSchema(path);
 }
 
 export class CompanyMcpClient {

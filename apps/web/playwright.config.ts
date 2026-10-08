@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(__dirname, "../..");
-const agentPort = 4110;
-const webPort = 3010;
+// Ports can be moved (E2E_AGENT_PORT / E2E_WEB_PORT) so runs can sit side by side.
+// Specs read the agent's URL from E2E_AGENT_URL, set here so workers see it too.
+const agentPort = Number(process.env.E2E_AGENT_PORT ?? 4110);
+const webPort = Number(process.env.E2E_WEB_PORT ?? 3010);
+process.env.E2E_AGENT_URL = `http://127.0.0.1:${agentPort}`;
 // The e2e run writes (P4 escalations, notices, assignments), so it gets its own
 // freshly seeded company database and never touches data/logistics.sqlite.
 // Kept in the environment so workers that re-read this file see the same path.

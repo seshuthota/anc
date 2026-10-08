@@ -7,6 +7,8 @@ import { composeA2UI } from "./composer.js";
 import { validateA2UI } from "./a2ui-validate.js";
 import type { RuntimeStore } from "@anc/runtime-storage";
 import { catalogAction, type CatalogAction, type CatalogActionId } from "./action-catalog.js";
+import { DEMO_CLOCK } from "@anc/logistics-db/constants";
+import type { AgentFinding } from "@anc/contracts";
 
 /*
  * Operations: every change to a company record goes through prepareOperation (a
@@ -327,7 +329,18 @@ function authorize(principal: Principal, action: CatalogAction) {
   if (!hasGrant(principal, action.requiredGrant)) throw new Error(`Not authorized to ${action.verb}`);
 }
 
-const TODAY = "2026-09-21";
+/**
+ * The business day an operation belongs to: the data's own "as of" date from the
+ * tool that was read, else the logistics database's demo clock. Never the wall clock
+ * and never a hardcoded date, so idempotency keys follow the dataset.
+ */
+export function businessDate(dataAsOf?: unknown): string {
+  if (typeof dataAsOf === "string" && /^\d{4}-\d{2}-\d{2}/.test(dataAsOf)) return dataAsOf.slice(0, 10);
+  return DEMO_CLOCK.slice(0, 10);
+}
+
+const NOTIFY_TOPIC = "at-risk-today";
+const LATE_AT_RISK_ARGS = { status: "open", category: "late", unassignedOnly: true, atRiskOnly: true, page: { limit: 100, offset: 0 } };
 
 type Prepared = { payload: Record<string, unknown>; text: string; confirmLabel: string; blocked?: boolean; resource: string };
 
@@ -358,8 +371,8 @@ async function prepareBriefingAction(store: RuntimeStore, principal: Principal, 
     const name = String(result.shipper?.name ?? shipperId);
     const manager = String(result.shipper?.accountManagerName ?? "their account manager");
     const resource = `shipper:${shipperId}`;
-    const topic = "at-risk-today";
-    const idempotencyKey = `notify:${shipperId}:${topic}:${TODAY}`;
+    const topic = NOTIFY_TOPIC;
+    const idempotencyKey = `notify:${shipperId}:${topic}:${businessDate(evidence.dataAsOf)}`;
     const queued = (result.queuedNotifications ?? []).find((item) => item.topic === topic);
     if (queued) return { payload: { actionId: action.id, shipperId }, text: `A notice for ${name} is already queued for ${manager} (${queued.id}). Nothing more to queue.`, confirmLabel: "Back", blocked: true, resource };
     return {
@@ -371,7 +384,7 @@ async function prepareBriefingAction(store: RuntimeStore, principal: Principal, 
     };
   }
   // assign_complaints
-  const args = { status: "open", category: "late", unassignedOnly: true, atRiskOnly: true, page: { limit: 100, offset: 0 } };
+  const args = LATE_AT_RISK_ARGS;
   const [queue, owners] = await readOnly(store, principal, runId, (client) => Promise.all([
     client.call("list_complaints", args, "customers"),
     client.call("list_eligible_assignees", { team: "customer-care" }, "customers"),
@@ -390,6 +403,47 @@ async function prepareBriefingAction(store: RuntimeStore, principal: Principal, 
     confirmLabel: `Assign ${plan.length} complaints`,
     resource,
   };
+}
+
+/**
+ * Operations already done, so the briefing does not offer them again, as
+ * `<actionId>:<recordId>` pairs:
+ * - an escalated equipment fault, from the evidence behind this run's findings
+ *   (content-addressed per owner, so looked up by id rather than by run);
+ * - a shipper whose delay notice is already queued (get_shipper.queuedNotifications);
+ * - late at-risk complaints when none is left without an owner (list_complaints).
+ * The last two are read-only lookups, made only for actions this person may take.
+ * A lookup that fails leaves the action offered: propose re-checks it anyway.
+ */
+export async function completedBriefingActions(store: RuntimeStore, principal: Principal, findings: AgentFinding[], runId: string): Promise<Set<string>> {
+  const done = new Set<string>();
+  const ids = new Set(findings.flatMap((finding) => finding.claims.flatMap((claim) => claim.evidenceIds)).filter((id) => id.startsWith("list_equipment_events-")));
+  for (const id of ids) {
+    for (const row of rowsOf(store.getEvidence(id, principal.id) ?? {})) if (row.escalatedAt) done.add(`escalate_equipment_fault:${String(row.id)}`);
+  }
+  const shippers = hasGrant(principal, "cap.shippers.notify")
+    ? [...new Set(findings.flatMap((finding) => finding.entities.filter((entity) => entity.type === "shipper").map((entity) => entity.id)))].slice(0, 3)
+    : [];
+  const complaints = hasGrant(principal, "cap.complaints.assign");
+  if (!shippers.length && !complaints) return done;
+  try {
+    await readOnly(store, principal, `done-${runId}`, async (client) => {
+      for (const shipperId of shippers) {
+        try {
+          const evidence = await client.call("get_shipper", { shipperId }, "customers");
+          const queued = ((evidence.result as { queuedNotifications?: Array<Record<string, unknown>> } | undefined)?.queuedNotifications ?? []).some((item) => item.topic === NOTIFY_TOPIC);
+          if (queued) done.add(`notify_shipper:${shipperId}`);
+        } catch { /* left offered */ }
+      }
+      if (complaints) {
+        try {
+          const queue = await client.call("list_complaints", LATE_AT_RISK_ARGS, "customers");
+          if (!rowsOf(queue).length) done.add("assign_complaints:late-at-risk");
+        } catch { /* left offered */ }
+      }
+    });
+  } catch { /* no lookup connection: nothing more is suppressed */ }
+  return done;
 }
 
 /** Propose: a new revision of the same surface with an inline confirm in place of the action row. */
@@ -433,7 +487,7 @@ export async function proposeBriefingAction(input: { store: RuntimeStore; princi
 /** Cancel (or Back): the proposal is closed and the action row returns. Nothing is written. */
 export function cancelBriefingAction(input: { store: RuntimeStore; principal: Principal; threadId: string; proposalId: string }): void {
   const proposal = input.store.getProposal(input.proposalId, input.principal.id);
-  if (!proposal) throw new Error("Proposal not found");
+  if (!proposal || proposal.threadId !== input.threadId) throw new Error("Proposal not found");
   const action = catalogAction(String(proposal.payload.actionId ?? ""));
   if (!action) throw new Error("Proposal not found");
   authorize(input.principal, action);
@@ -456,22 +510,35 @@ type Receipt = NonNullable<NonNullable<PresentationBriefing["primary"]>["receipt
 export async function confirmBriefingAction(input: { store: RuntimeStore; principal: Principal; threadId: string; proposalId: string }): Promise<void> {
   const { store, principal } = input;
   const proposal = store.getProposal(input.proposalId, principal.id);
-  if (!proposal) throw new Error("Proposal not found");
+  // A proposal belongs to the thread it was made on; another thread cannot confirm it.
+  if (!proposal || proposal.threadId !== input.threadId) throw new Error("Proposal not found");
   const action = catalogAction(String(proposal.payload.actionId ?? ""));
   if (!action) throw new Error("Proposal not found");
   authorize(principal, action);
   if (proposal.status === "committed") return; // a duplicate confirm is a no-op
+  if (proposal.status === "prepared" && Date.parse(proposal.expiresAt) < Date.now()) {
+    // Expired: nothing is written. The inline confirm is cleared and the card says why,
+    // rather than leaving a Confirm button that can only fail.
+    setProposalStatus(store, principal, proposal, "expired");
+    audit(store, principal, "operation.expire", action.id, "expired");
+    closeConfirm(store, input.threadId, principal, input.proposalId, {
+      operationId: "not-recorded",
+      actionId: action.id,
+      status: "failed",
+      text: `Not done: this confirmation expired${clock(proposal.expiresAt) ? ` at ${clock(proposal.expiresAt)}` : ""} before it was confirmed. Nothing was written; propose it again to see the current state.`,
+      evidenceIds: [],
+    }, false);
+    return;
+  }
   await once(input.proposalId, async () => {
     const open = openProposal(store, principal, input.proposalId);
     const payload = open.payload;
     let receipt: Receipt;
     let succeeded = false;
+    let outcome: CommitOutcome<unknown> | undefined;
     try {
       const { idempotencyKey, resource, write } = writeFor(action.id, payload, principal);
-      const outcome = await commitOperation({ store, principal, proposal: open, capability: action.requiredGrant, idempotencyKey, payload, resource, write });
-      const reread = await readOnly(store, principal, `reread-${outcome.operationId}`, (client) => rereadFor(action.id, payload, client));
-      receipt = { operationId: outcome.operationId, actionId: action.id, status: "succeeded", text: receiptText(action.id, payload, outcome, reread), evidenceIds: typeof reread.evidenceId === "string" ? [reread.evidenceId] : [] };
-      succeeded = true;
+      outcome = await commitOperation({ store, principal, proposal: open, capability: action.requiredGrant, idempotencyKey, payload, resource, write });
     } catch (error) {
       const message = error instanceof Error ? error.message : "operation failed";
       if (/Not authorized/.test(message)) throw error;
@@ -488,16 +555,40 @@ export async function confirmBriefingAction(input: { store: RuntimeStore; princi
       if (!stale) setProposalStatus(store, principal, open, "failed");
       else setProposalStatus(store, principal, open, "refused");
     }
-    const active = activeBriefing(store, input.threadId);
-    const { pending: _closed, ...rest } = active.briefing;
-    const primary = rest.primary ? { ...rest.primary, receipts: [...(rest.primary.receipts ?? []), receipt].slice(-3) } : rest.primary;
-    saveBriefing(store, input.threadId, principal.id, active, {
-      ...rest,
-      primary,
-      // A done action leaves the row; a refused one stays so it can be proposed again.
-      actions: succeeded ? rest.actions.filter((item) => item.id !== action.id) : rest.actions,
-    } as PresentationBriefing);
+    if (outcome) {
+      // The write succeeded and the proposal is committed. The re-read only words the
+      // receipt: if it fails, the receipt still says it was done, that it could not be
+      // re-confirmed, and the proposal stays committed (never marked failed).
+      succeeded = true;
+      try {
+        const committed = outcome;
+        const reread = await readOnly(store, principal, `reread-${committed.operationId}`, (client) => rereadFor(action.id, payload, client));
+        receipt = { operationId: committed.operationId, actionId: action.id, status: "succeeded", text: receiptText(action.id, payload, committed, reread), evidenceIds: typeof reread.evidenceId === "string" ? [reread.evidenceId] : [] };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "read failed";
+        audit(store, principal, "operation.reread", action.id, "failed", message);
+        receipt = { operationId: outcome.operationId, actionId: action.id, status: "succeeded", text: unconfirmedReceiptText(action.id, payload, outcome), evidenceIds: [] };
+      }
+    }
+    closeConfirm(store, input.threadId, principal, input.proposalId, receipt!, succeeded);
   });
+}
+
+/** Replaces the inline confirm with a receipt on the primary card. A done action leaves the row. */
+function closeConfirm(store: RuntimeStore, threadId: string, principal: Principal, proposalId: string, receipt: Receipt, done: boolean) {
+  const active = activeBriefing(store, threadId);
+  const actionId = receipt.actionId;
+  const { pending, ...rest } = active.briefing;
+  // Only this proposal's confirm is closed; a newer one on the card stays.
+  const keep = pending && pending.proposalId !== proposalId ? { pending } : {};
+  const primary = rest.primary ? { ...rest.primary, receipts: [...(rest.primary.receipts ?? []), receipt].slice(-3) } : rest.primary;
+  saveBriefing(store, threadId, principal.id, active, {
+    ...rest,
+    ...keep,
+    primary,
+    // A done action leaves the row; a refused or expired one stays so it can be proposed again.
+    actions: done ? rest.actions.filter((item) => item.id !== actionId) : rest.actions,
+  } as PresentationBriefing);
 }
 
 function writeFor(id: CatalogActionId, payload: Record<string, unknown>, principal: Principal): { idempotencyKey: string; resource: string; write: (client: CompanyMcpClient) => Promise<unknown> } {
@@ -537,6 +628,17 @@ function rereadFor(id: CatalogActionId, payload: Record<string, unknown>, client
   if (id === "escalate_equipment_fault") return client.call("list_equipment_events", { openOnly: true }, domain[id]);
   if (id === "notify_shipper") return client.call("get_shipper", { shipperId: String(payload.shipperId) }, domain[id]);
   return client.call("list_complaints", payload.args as Record<string, unknown>, domain[id]);
+}
+
+/** The receipt when the write succeeded but the follow-up read of the record did not. */
+function unconfirmedReceiptText(id: CatalogActionId, payload: Record<string, unknown>, outcome: CommitOutcome<unknown>): string {
+  const ref = `receipt ${shortId(outcome.operationId)}`;
+  const what = id === "escalate_equipment_fault"
+    ? `Escalated ${payload.equipment} to ${payload.engineerName}`
+    : id === "notify_shipper"
+      ? `Notice for ${payload.shipperName} queued for account manager ${payload.accountManagerName} · nothing was sent`
+      : "Late complaints assigned";
+  return `${what} · done, but the record could not be re-read to confirm it just now · ${ref}`;
 }
 
 function receiptText(id: CatalogActionId, payload: Record<string, unknown>, outcome: CommitOutcome<unknown>, reread: Record<string, unknown>): string {
